@@ -1,8 +1,10 @@
 """Camera self-view for the prompter: frames from a V4L2 camera as GTK textures, via ffmpeg.
 
-A camera can usually be read by only one app at a time (v4l2loopback devices included), so
-to see yourself here while Zoom or OBS uses the same camera, give the prompter its own copy:
-see "Camera self-view" in the README.
+A camera can usually be read by only one app at a time (v4l2loopback devices included). The
+self-view holds it only while it's showing; if Zoom or OBS already has it, the self-view says
+so and keeps retrying rather than taking it. To see yourself while another app uses the
+camera, point the self-view at a separate device fed from the same source, such as a second
+v4l2loopback device.
 """
 
 import fcntl

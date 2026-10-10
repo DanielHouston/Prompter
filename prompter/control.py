@@ -262,7 +262,7 @@ class ControlWindow(Adw.ApplicationWindow):
         self.preview_row = Adw.SwitchRow(title="Show self-view", subtitle="Off", use_markup=False)
         self.preview_row.connect("notify::active", lambda r, _p: self._updating or self.app.set_preview("enabled", r.get_active()))
         group.add(self.preview_row)
-        self.camera_row = Adw.ComboRow(title="Camera", subtitle="Its own feed, if another app uses the same camera")
+        self.camera_row = Adw.ComboRow(title="Camera", subtitle="Only one app can use a camera at a time")
         self.camera_row.connect("notify::selected", self._camera_picked)
         group.add(self.camera_row)
         self.mirror_row = Adw.SwitchRow(title="Mirror")
