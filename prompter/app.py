@@ -24,6 +24,7 @@ from .audio import microphones  # noqa: E402
 from .camera import CameraFeed, cameras  # noqa: E402
 from .control import ControlWindow  # noqa: E402
 from .ddc import ScreenControl  # noqa: E402
+from .readouts import DEFAULT_READOUTS, Clock, Stopwatch, duration  # noqa: E402
 from .script import words_of  # noqa: E402
 from .shortcuts import GlobalShortcuts  # noqa: E402
 from .tray import SEPARATOR, MenuItem, Tray  # noqa: E402
@@ -45,6 +46,7 @@ DEFAULTS = {
     "appearance": DEFAULT_APPEARANCE,
     "crosshair": DEFAULT_CROSSHAIR,
     "preview": DEFAULT_PREVIEW,
+    "readouts": DEFAULT_READOUTS,
 }
 SESSIONS = Path(GLib.get_user_cache_dir()) / "prompter" / "sessions"
 SUFFIXES = (".md", ".markdown", ".txt")
@@ -72,7 +74,9 @@ class PrompterApp(Adw.Application):
         self._events = None
         self._rate = deque()  # (monotonic time, position) while voice-following
         self._primed_at = -100
-        self._save_id = self._reload_id = 0
+        self._save_id = self._reload_id = self._readout_tick = 0
+        self.stopwatch = Stopwatch()
+        self.clock = Clock()
         self._monitor = None
 
     # --- lifecycle ----------------------------------------------------------
@@ -115,6 +119,7 @@ class PrompterApp(Adw.Application):
         else:
             self.control.set_screen("Needs a one-time setup: see “Prompter brightness” in the README")
         self._apply_preview()
+        self._apply_readouts()
 
         self.asr = AsrWorker(self._asr_message)
         if self.config["record"]:
@@ -229,6 +234,7 @@ class PrompterApp(Adw.Application):
         self._remember()
         self.file = path
         self.config["file"] = name
+        self.stopwatch.reset()
         self._rate.clear()
         positions = self.config["positions"]
         self._load(positions.get(str(path), positions.get(name, 0)))  # by name: saved before folders could change
@@ -237,6 +243,7 @@ class PrompterApp(Adw.Application):
         """Nothing to read: an empty folder."""
         self.script = self.aligner = self.file = None
         self.pos = 0
+        self.stopwatch.reset()
         self.view.set_script(None, 0)
         self.control.set_script(None, "No script")
         self.refresh_files()
@@ -327,9 +334,15 @@ class PrompterApp(Adw.Application):
         if self.pos >= n:
             where = "Finished"
         else:
-            seconds = int((n - self.pos) / self.speaking_rate() * 60)
-            where = f"{self.script.sections[section].title} · {self.pos * 100 // max(n, 1)}% · ~{seconds // 60}:{seconds % 60:02d} left"
+            where = f"{self.script.sections[section].title} · {self._percent()}% · ~{duration(self._seconds_left())} left"
         self.control.set_position(self.pos, section, where, self.pos / max(n, 1))
+        self._update_readouts()
+
+    def _percent(self):
+        return self.pos * 100 // max(len(self.script), 1)
+
+    def _seconds_left(self):
+        return max(0, len(self.script) - self.pos) / self.speaking_rate() * 60
 
     def _frame(self, dt):
         if self.mode != "fixed" or not self.playing or not self.script:
@@ -501,10 +514,17 @@ class PrompterApp(Adw.Application):
         self.jump(start)
 
     def on_restart(self, *_):
+        self.stopwatch.reset()
         self.jump(0)
 
     def on_preview(self, *_):
         self.set_preview("enabled", not self.config["preview"]["enabled"])
+
+    def on_timer(self, *_):
+        self.set_readout("timer", not self.config["readouts"]["timer"])
+
+    def on_progress(self, *_):
+        self.set_readout("progress", not self.config["readouts"]["progress"])
 
     def on_calibrate(self, *_):
         self.set_calibrating(not self.calibrating)
@@ -585,6 +605,35 @@ class PrompterApp(Adw.Application):
             self.control.set_camera_status("Off")
         self._update_tray()
 
+    def set_readout(self, key, value):
+        self.config["readouts"][key] = value
+        self._apply_readouts()
+        self._save_soon()
+
+    def _apply_readouts(self):
+        self.control.set_readouts(self.config["readouts"])
+        self._update_readouts()
+        timer = self.config["readouts"]["timer"]
+        if timer and not self._readout_tick:  # the view only redraws when the text changes
+            self._readout_tick = GLib.timeout_add(250, lambda: self._update_readouts() or GLib.SOURCE_CONTINUE)
+        elif not timer and self._readout_tick:
+            GLib.source_remove(self._readout_tick)
+            self._readout_tick = 0
+
+    def _update_readouts(self):
+        readouts = self.config["readouts"]
+        shown = []
+        if readouts["timer"]:
+            if readouts["timer_shows"] == "clock":
+                shown.append((readouts["timer_position"], self.clock.text()))
+            elif readouts["timer_shows"] != "left":
+                shown.append((readouts["timer_position"], duration(self.stopwatch.seconds)))
+            elif self.script:
+                shown.append((readouts["timer_position"], f"{duration(self._seconds_left())} left"))
+        if readouts["progress"] and self.script:
+            shown.append((readouts["progress_position"], f"{self._percent()}%"))
+        self.view.set_readouts(shown)
+
     def set_calibrating(self, on):
         """Find-the-lens mode: the Prompter goes black apart from the crosshair."""
         self.calibrating = on
@@ -608,6 +657,7 @@ class PrompterApp(Adw.Application):
 
     def _sync_state(self):
         voice = self.mode == "voice"
+        self.stopwatch.run(self.playing)
         if voice and self.playing:
             self.asr.listen()
         else:
@@ -624,6 +674,7 @@ class PrompterApp(Adw.Application):
         else:
             self._set_status("Listening")
         self._update_tray()
+        self._update_readouts()
 
     def _update_tray(self):
         voice = self.mode == "voice"

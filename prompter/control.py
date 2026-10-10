@@ -2,7 +2,7 @@
 
 Two tabs: Prompt, for while you're reading (transport, mode, where you are, the script with
 click-to-jump, quick toggles), and Setup, for what you set once (microphone, text, eye-line
-crosshair, camera self-view, Prompter screen, diagnostics).
+crosshair, camera self-view, timer and progress, Prompter screen, diagnostics).
 """
 
 import bisect
@@ -19,6 +19,7 @@ from gi.repository import Adw, Gdk, Gio, GLib, Gtk, Pango  # noqa: E402
 
 from .actions import GLOBAL_ONLY, KEYS  # noqa: E402
 from .fontpicker import FontPicker  # noqa: E402
+from .readouts import POSITIONS, TIMER_SHOWS  # noqa: E402
 from .view import rgba  # noqa: E402
 
 CORNERS = (("top-right", "Top right"), ("top-left", "Top left"), ("bottom-right", "Bottom right"), ("bottom-left", "Bottom left"))
@@ -178,6 +179,14 @@ class ControlWindow(Adw.ApplicationWindow):
                                                 css_classes=["flat"], focusable=False)
         self.quick_crosshair.connect("toggled", lambda b: self._updating or self.app.set_style("crosshair", "enabled", b.get_active()))
         bar.append(self.quick_crosshair)
+        self.quick_timer = Gtk.ToggleButton(icon_name="preferences-system-time-symbolic", tooltip_text="Timer (T)",
+                                            css_classes=["flat"], focusable=False)
+        self.quick_timer.connect("toggled", lambda b: self._updating or self.app.set_readout("timer", b.get_active()))
+        bar.append(self.quick_timer)
+        self.quick_progress = Gtk.ToggleButton(label="%", tooltip_text="How far through, in percent (%)",
+                                               css_classes=["flat"], focusable=False)
+        self.quick_progress.connect("toggled", lambda b: self._updating or self.app.set_readout("progress", b.get_active()))
+        bar.append(self.quick_progress)
         bar.append(Gtk.Separator(orientation=Gtk.Orientation.VERTICAL, margin_start=4, margin_end=4))
 
         self.quick_brightness = Gtk.Box(spacing=4, hexpand=True, tooltip_text="Prompter brightness")
@@ -278,6 +287,25 @@ class ControlWindow(Adw.ApplicationWindow):
         group.add(Adw.SpinRow(title="Width", subtitle="% of the Prompter", adjustment=self.preview_width))
         page.add(group)
 
+        group = Adw.PreferencesGroup(title="Timer", description="On the Prompter, while you read")
+        self.timer_row = Adw.SwitchRow(title="Show timer")
+        self.timer_row.connect("notify::active", lambda r, _p: self._updating or self.app.set_readout("timer", r.get_active()))
+        group.add(self.timer_row)
+        self.timer_shows_row = Adw.ComboRow(title="Shows", model=Gtk.StringList.new([label for _, label, _ in TIMER_SHOWS]))
+        self.timer_shows_row.connect("notify::selected", self._timer_shows_picked)
+        group.add(self.timer_shows_row)
+        self.timer_position_row = self._position_row("timer_position")
+        group.add(self.timer_position_row)
+        page.add(group)
+
+        group = Adw.PreferencesGroup(title="Progress", description="How far through the script you are, in percent")
+        self.progress_row = Adw.SwitchRow(title="Show progress")
+        self.progress_row.connect("notify::active", lambda r, _p: self._updating or self.app.set_readout("progress", r.get_active()))
+        group.add(self.progress_row)
+        self.progress_position_row = self._position_row("progress_position")
+        group.add(self.progress_position_row)
+        page.add(group)
+
         self.screen_group = Adw.PreferencesGroup(title="Prompter screen")
         self.screen_rows = []
         for name, title in (("brightness", "Brightness"), ("contrast", "Contrast")):
@@ -300,6 +328,11 @@ class ControlWindow(Adw.ApplicationWindow):
         group.add(self.sessions_row)
         page.add(group)
         return page
+
+    def _position_row(self, key):
+        row = Adw.ComboRow(title="Position", model=Gtk.StringList.new([label for _, label in POSITIONS]))
+        row.connect("notify::selected", self._position_picked, key)
+        return row
 
     def _spin_row(self, group, key, title, subtitle, lo, hi, step, digits):
         adj = self._adjustment(lo, hi, step, lambda v: self.app.set_style(group, key, _number(v, digits)))
@@ -492,6 +525,24 @@ class ControlWindow(Adw.ApplicationWindow):
         self.preview_width.set_value(preview["size"])
         self._updating = False
 
+    def set_readouts(self, readouts):
+        self._updating = True
+        self.timer_row.set_active(readouts["timer"])
+        self.quick_timer.set_active(readouts["timer"])
+        self.progress_row.set_active(readouts["progress"])
+        self.quick_progress.set_active(readouts["progress"])
+        shows = [value for value, _, _ in TIMER_SHOWS]
+        selected = shows.index(readouts["timer_shows"]) if readouts["timer_shows"] in shows else 0
+        self.timer_shows_row.set_selected(selected)
+        self.timer_shows_row.set_subtitle(TIMER_SHOWS[selected][2])
+        positions = [value for value, _ in POSITIONS]
+        shared = readouts["timer"] and readouts["progress"] and readouts["timer_position"] == readouts["progress_position"]
+        for row, key, other in ((self.timer_position_row, "timer_position", "progress"),
+                                (self.progress_position_row, "progress_position", "timer")):
+            row.set_selected(positions.index(readouts[key]) if readouts[key] in positions else 0)
+            row.set_subtitle(f"Beside the {other}" if shared else "")
+        self._updating = False
+
     def set_camera_status(self, text):
         self.preview_row.set_subtitle(text)
 
@@ -640,6 +691,14 @@ class ControlWindow(Adw.ApplicationWindow):
             return  # cancelled
         if folder and folder.get_path():
             self.app.set_scripts_dir(folder.get_path())
+
+    def _position_picked(self, row, _pspec, key):
+        if not self._updating and 0 <= row.get_selected() < len(POSITIONS):
+            self.app.set_readout(key, POSITIONS[row.get_selected()][0])
+
+    def _timer_shows_picked(self, row, _pspec):
+        if not self._updating and 0 <= row.get_selected() < len(TIMER_SHOWS):
+            self.app.set_readout("timer_shows", TIMER_SHOWS[row.get_selected()][0])
 
     def _mic_picked(self, row, _pspec):
         if not self._updating and 0 <= row.get_selected() < len(self._mic_names):

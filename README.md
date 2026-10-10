@@ -16,6 +16,8 @@ speech recognition, or at a steady speed if you prefer.
 - **Eye-line crosshair** over the camera lens, with a "Find the lens" mode that blacks out
   the screen so you can see the lens through the glass.
 - **Camera self-view** in a corner of the Prompter.
+- **A timer and progress** on the Prompter: reading time, time left or the time of day, and
+  how far through the script you are, in whichever corner or edge suits you.
 - **The Prompter's brightness and contrast**, set from the app (DDC/CI, as Camera Hub does).
 - **Global shortcuts** through your desktop's shortcuts portal, plus `prompterctl` for
   anything else.
@@ -62,10 +64,10 @@ itself. The control window opens on your current screen:
 
 - **Prompt** is for while you read. It has start/pause, section jumps, voice follow or
   fixed speed, how far through you are and roughly how long is left, and the script
-  itself: click anywhere to jump there. A quick bar holds text size, self-view, crosshair
-  and brightness.
+  itself: click anywhere to jump there. A quick bar holds text size, self-view, crosshair,
+  timer, progress and brightness.
 - **Setup** holds everything you set once: microphone, language, speech model, text style,
-  crosshair, camera, brightness and diagnostics.
+  crosshair, camera, timer, progress, brightness and diagnostics.
 
 Closing the control window doesn't stop Prompter: it stays in your tray (KDE Plasma, waybar
 and most other bars; GNOME needs the AppIndicator extension). Click the tray icon to bring
@@ -112,9 +114,9 @@ work while you're in another app:
 - **Anything else**: bind keys to `prompterctl <action>`. It starts Prompter if needed.
 
 The actions are `toggle`, `mode`, `next-section`, `prev-section`, `back`, `restart`,
-`faster`, `slower`, `bigger`, `smaller`, `preview` and `control`. The menu's **Keyboard
-Shortcuts** shows what's bound. The same keys without modifiers (Space, V, Page Up/Down,
-Backspace, Home, [ ], − =, C) work in the control window's Prompt tab.
+`faster`, `slower`, `bigger`, `smaller`, `preview`, `timer`, `progress` and `control`. The
+menu's **Keyboard Shortcuts** shows what's bound. The same keys without modifiers (Space, V,
+Page Up/Down, Backspace, Home, [ ], − =, C, T, %) work in the control window's Prompt tab.
 
 ### Prompter brightness
 

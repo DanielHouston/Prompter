@@ -15,6 +15,8 @@ SCROLL_TAU = 0.18  # seconds; how softly the text glides to a new position
 # would happily redraw it ~100 times a second. Every one of those is copied and compressed for
 # USB; past what the panel can show, that just smears fast-moving text. Cap redraws instead.
 MAX_FPS = 60
+PAD = 16  # px between the screen edge and what sits in its corners
+GAP = 8  # px between readouts that share a position
 
 DEFAULT_APPEARANCE = {
     "font": "Noto Sans Medium",
@@ -84,6 +86,8 @@ class PrompterView(Gtk.Widget):
         self.calibrating = False  # "find the lens": black screen, just the crosshair
         self.preview = dict(DEFAULT_PREVIEW)
         self.preview_frame = None  # latest camera texture, None when there's no signal
+        self.readouts = ()  # ((position, text), ...): the timer and progress
+        self._readout_layouts = {}
         self.on_frame = None
         self._tick = None
         self._last_frame = None
@@ -139,6 +143,13 @@ class PrompterView(Gtk.Widget):
         if self.preview["enabled"]:
             self.queue_draw()
 
+    def set_readouts(self, readouts):
+        """((position, text), ...) such as (("top-left", "4:32"), ("top-right", "37%"))."""
+        readouts = tuple(readouts)
+        if readouts != self.readouts:
+            self.readouts = readouts
+            self.queue_draw()
+
     def set_calibrating(self, on):
         self.calibrating = on
         self.queue_draw()
@@ -155,6 +166,10 @@ class PrompterView(Gtk.Widget):
         self.c_background, self.c_accent, self.c_text = bg, accent, text
         self.p_text, self.p_heading = _pango(text), _pango(accent)
         self.p_spoken, self.p_cue = _pango(_mix(text, bg, 0.68)), _pango(_mix(text, bg, 0.4))
+        self.c_readout = _mix(text, bg, 0.25)
+        self.c_readout_bg = _mix(bg, text, 0.08)
+        self.c_readout_bg.alpha = 0.92
+        self._readout_layouts = {}
 
     def do_size_allocate(self, width, height, baseline):
         if width != self.laid_out_width:
@@ -270,16 +285,23 @@ class PrompterView(Gtk.Widget):
 
         if self.preview["enabled"]:
             self._draw_preview(snapshot, width, height)
+        if self.readouts:
+            self._draw_readouts(snapshot, width, height)
         if self.crosshair["enabled"]:
             self._draw_crosshair(snapshot, width, height)
 
-    def _draw_preview(self, snapshot, width, height):
-        """What the camera sees, in a corner, so you can check framing while you read."""
-        p, pad = self.preview, 16
+    def _preview_box(self, width, height):
+        p = self.preview
         w = width * p["size"] / 100
         h = w * 9 / 16
-        x = pad if p["corner"].endswith("left") else width - w - pad
-        y = pad if p["corner"].startswith("top") else height - h - pad
+        x = PAD if p["corner"].endswith("left") else width - w - PAD
+        y = PAD if p["corner"].startswith("top") else height - h - PAD
+        return x, y, w, h
+
+    def _draw_preview(self, snapshot, width, height):
+        """What the camera sees, in a corner, so you can check framing while you read."""
+        p = self.preview
+        x, y, w, h = self._preview_box(width, height)
         box = Graphene.Rect().init(x, y, w, h)
         outline = Gsk.RoundedRect()
         outline.init_from_rect(box, 10)
@@ -307,6 +329,45 @@ class PrompterView(Gtk.Widget):
         edge = Gdk.RGBA()
         edge.red, edge.green, edge.blue, edge.alpha = self.c_accent.red, self.c_accent.green, self.c_accent.blue, 0.6
         snapshot.append_border(outline, [1.5] * 4, [edge] * 4)
+
+    def _draw_readouts(self, snapshot, width, height):
+        """Timer and progress, each on a pill that keeps it readable over the text scrolling
+        underneath."""
+        size = max(14.0, height * 0.045)
+        pills = []
+        for position, text in self.readouts:
+            layout = self._readout_layout(text, size)
+            text_w, text_h = layout.get_pixel_size()
+            pad_x, pad_y = round(text_h * 0.55), round(text_h * 0.18)
+            pills.append((position, layout, text_w + 2 * pad_x, text_h + 2 * pad_y, pad_x, pad_y))
+        avoid = self._preview_box(width, height) if self.preview["enabled"] else None
+        spots = place_readouts(width, height, [(position, w, h) for position, _, w, h, _, _ in pills], avoid)
+        for (_, layout, w, h, pad_x, pad_y), (x, y) in zip(pills, spots):
+            box = Graphene.Rect().init(x, y, w, h)
+            pill = Gsk.RoundedRect()
+            pill.init_from_rect(box, h / 2)
+            snapshot.push_rounded_clip(pill)
+            snapshot.append_color(self.c_readout_bg, box)
+            snapshot.pop()
+            snapshot.save()
+            snapshot.translate(Graphene.Point().init(x + pad_x, y + pad_y))
+            snapshot.append_layout(layout, self.c_readout)
+            snapshot.restore()
+
+    def _readout_layout(self, text, size):
+        layout = self._readout_layouts.get((text, size))
+        if layout is None:
+            if len(self._readout_layouts) > 16:  # the timer makes a new one every second
+                self._readout_layouts.clear()
+            layout = self.create_pango_layout(text)
+            desc = Pango.FontDescription.from_string(self.appearance["font"])
+            desc.set_absolute_size(size * Pango.SCALE)
+            layout.set_font_description(desc)
+            attrs = Pango.AttrList()
+            attrs.insert(Pango.attr_font_features_new("tnum"))  # digits all one width: the timer doesn't jiggle
+            layout.set_attributes(attrs)
+            self._readout_layouts[(text, size)] = layout
+        return layout
 
     def _draw_calibration(self, snapshot, width, height):
         """Black, so the glass turns see-through and the lens shows behind it; the crosshair at
@@ -375,6 +436,31 @@ class PrompterView(Gtk.Widget):
             self._last_draw = now
             self.queue_draw()
         return GLib.SOURCE_CONTINUE
+
+
+def place_readouts(width, height, pills, avoid=None):
+    """Where each readout's pill goes, as whole-pixel (x, y). pills: [(position, w, h)] in order,
+    position like "top-left" or "bottom-center"; pills sharing a position sit side by side.
+    avoid: the self-view's (x, y, w, h), which pills in its way move beside."""
+    rows = {}
+    for i, (position, _w, _h) in enumerate(pills):
+        rows.setdefault(position, []).append(i)
+    spots = [None] * len(pills)
+    for position, members in rows.items():
+        vertical, _, horizontal = position.partition("-")
+        total = sum(pills[i][1] for i in members) + GAP * (len(members) - 1)
+        tallest = max(pills[i][2] for i in members)
+        x = {"left": PAD, "center": (width - total) / 2}.get(horizontal, width - PAD - total)
+        y = PAD if vertical == "top" else height - PAD - tallest
+        if avoid:
+            ax, ay, aw, ah = avoid
+            if x < ax + aw and ax < x + total and y < ay + ah and ay < y + tallest:
+                x = ax - PAD - total if ax + aw / 2 > width / 2 else ax + aw + PAD
+                x = max(PAD, min(x, width - PAD - total))
+        for i in members:
+            spots[i] = (round(x), round(y + (tallest - pills[i][2]) / 2))
+            x += pills[i][1] + GAP
+    return spots
 
 
 def _insert(attrs, attr, start, end):

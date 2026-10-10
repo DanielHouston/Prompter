@@ -8,7 +8,9 @@ from gi.repository import Pango  # noqa: E402
 from prompter import APP_ID, displays  # noqa: E402
 from prompter.actions import ACTIONS, GLOBAL_ONLY, KEYS  # noqa: E402
 from prompter.fontpicker import closest, for_language  # noqa: E402
+from prompter.readouts import Clock, Stopwatch, duration  # noqa: E402
 from prompter.tray import SEPARATOR, MenuItem, _pixmaps  # noqa: E402
+from prompter.view import GAP, PAD, place_readouts  # noqa: E402
 
 
 class FakeMonitor:
@@ -122,6 +124,76 @@ class TrayTest(unittest.TestCase):
         self.assertEqual([(w, h, len(d)) for w, h, d in pixmaps], [(s, s, s * s * 4) for s in (22, 32, 48, 64)])
         alpha = pixmaps[1][2][0::4]  # ARGB: alpha first
         self.assertEqual((min(alpha), max(alpha)), (0, 255))
+
+
+class ReadoutsTest(unittest.TestCase):
+    def test_stopwatch_only_runs_while_reading(self):
+        now = [100.0]
+        watch = Stopwatch(clock=lambda: now[0])
+        watch.run(True)
+        now[0] += 30
+        watch.run(False)  # paused between takes
+        now[0] += 600
+        self.assertEqual(watch.seconds, 30)
+        watch.run(True)
+        now[0] += 5
+        self.assertEqual(watch.seconds, 35)
+        watch.run(True)  # still running: no restart
+        now[0] += 5
+        self.assertEqual(watch.seconds, 40)
+
+    def test_stopwatch_reset_keeps_running(self):
+        now = [0.0]
+        watch = Stopwatch(clock=lambda: now[0])
+        watch.run(True)
+        now[0] += 50
+        watch.reset()
+        now[0] += 3
+        self.assertEqual(watch.seconds, 3)
+
+    def test_duration(self):
+        self.assertEqual(duration(0), "0:00")
+        self.assertEqual(duration(65.9), "1:05")
+        self.assertEqual(duration(3723), "1:02:03")
+        self.assertEqual(duration(-4), "0:00")
+
+    def test_clock_formats(self):
+        from gi.repository import GLib
+        evening = GLib.DateTime.new_local(2026, 10, 10, 21, 5, 0)
+        clock = Clock()
+        clock.settings = None  # no desktop setting: 24-hour
+        self.assertEqual(clock.text(evening), "21:05")
+        clock.settings = FakeSettings({"clock-format": "12h"})
+        self.assertRegex(clock.text(evening), r"^9:05")
+
+
+class PlaceReadoutsTest(unittest.TestCase):
+    W, H = 1024, 600
+
+    def test_corners_and_centre(self):
+        spots = place_readouts(self.W, self.H, [("top-left", 80, 40), ("bottom-right", 60, 40), ("bottom-center", 100, 40)])
+        self.assertEqual(spots, [(PAD, PAD), (self.W - PAD - 60, self.H - PAD - 40), ((self.W - 100) // 2, self.H - PAD - 40)])
+
+    def test_same_position_side_by_side(self):
+        spots = place_readouts(self.W, self.H, [("top-center", 80, 40), ("top-center", 60, 40)])
+        left = round((self.W - (80 + GAP + 60)) / 2)
+        self.assertEqual(spots, [(left, PAD), (left + 80 + GAP, PAD)])
+
+    def test_moves_beside_the_self_view(self):
+        view_right = (700, PAD, 300, 170)  # x, y, w, h in the top right
+        spots = place_readouts(self.W, self.H, [("top-right", 60, 40), ("bottom-right", 60, 40)], avoid=view_right)
+        self.assertEqual(spots[0], (700 - PAD - 60, PAD))  # to its left
+        self.assertEqual(spots[1], (self.W - PAD - 60, self.H - PAD - 40))  # not in the way: stays
+        view_left = (PAD, PAD, 300, 170)
+        self.assertEqual(place_readouts(self.W, self.H, [("top-left", 60, 40)], avoid=view_left), [(PAD + 300 + PAD, PAD)])
+
+
+class FakeSettings:
+    def __init__(self, values):
+        self.values = values
+
+    def get_string(self, key):
+        return self.values[key]
 
 
 class FakeFontContext:

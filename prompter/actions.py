@@ -2,7 +2,8 @@
 
 # Everything the app can be told to do: from the window, prompterctl, or global shortcuts
 ACTIONS = ("toggle", "mode", "faster", "slower", "bigger", "smaller", "next-section", "prev-section", "back",
-           "restart", "preview", "calibrate", "control", "open-folder", "shortcuts", "reload", "quit")
+           "restart", "preview", "timer", "progress", "calibrate", "control", "open-folder", "shortcuts", "reload",
+           "quit")
 
 # key in the control window (GTK name), action, what it does, suggested global shortcut
 # (XDG shortcut format; the desktop has the final say)
@@ -18,5 +19,7 @@ KEYS = (
     ("equal", "bigger", "Bigger text", "LOGO+ALT+equal"),
     ("minus", "smaller", "Smaller text", "LOGO+ALT+minus"),
     ("c", "preview", "Camera self-view", "LOGO+ALT+c"),
+    ("t", "timer", "Timer", "LOGO+ALT+t"),
+    ("percent", "progress", "Progress (%)", "LOGO+ALT+percent"),
 )
 GLOBAL_ONLY = (("control", "Show the control window", "LOGO+ALT+p"),)
