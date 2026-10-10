@@ -18,7 +18,9 @@ gi.require_version("Adw", "1")
 from gi.repository import Adw, Gdk, Gio, GLib, Gtk, Pango  # noqa: E402
 
 from .actions import GLOBAL_ONLY, KEYS  # noqa: E402
+from . import models  # noqa: E402
 from .fontpicker import FontPicker  # noqa: E402
+from .modelsdialog import ModelsDialog  # noqa: E402
 from .readouts import POSITIONS, TIMER_SHOWS  # noqa: E402
 from .view import rgba  # noqa: E402
 
@@ -28,9 +30,7 @@ LANGUAGES = (("en", "English"), ("de", "German"), ("fr", "French"), ("es", "Span
              ("pt", "Portuguese"), ("nl", "Dutch"), ("pl", "Polish"), ("sv", "Swedish"), ("da", "Danish"),
              ("no", "Norwegian"), ("fi", "Finnish"), ("cs", "Czech"), ("tr", "Turkish"), ("ru", "Russian"),
              ("uk", "Ukrainian"), ("el", "Greek"), ("hu", "Hungarian"), ("ro", "Romanian"))
-MODELS = (("auto", "Automatic"), ("distil-large-v3", "Distil large v3 · English, GPU"),
-          ("large-v3-turbo", "Large v3 turbo · any language, GPU"), ("small.en", "Small · English, CPU-friendly"),
-          ("small", "Small · any language, CPU-friendly"))
+DEVICES = (("auto", "Automatic"), ("cuda", "Graphics card"), ("cpu", "Processor"))
 
 CSS = """
 .prompter-play { min-width: 72px; min-height: 72px; -gtk-icon-size: 30px; }
@@ -53,7 +53,9 @@ class ControlWindow(Adw.ApplicationWindow):
         self._mic_names = [None]
         self._camera_paths = []
         self._display_connectors = [None]
-        self._models = [m for m, _ in MODELS]
+        self._voice = True
+        self._missing = False  # voice follow has no speech model to run
+        self.models_dialog = None
         self._global_triggers = {}
         self.connect("close-request", lambda *_: self.set_visible(False) or True)
         _install_css()
@@ -140,6 +142,13 @@ class ControlWindow(Adw.ApplicationWindow):
         speed.append(Gtk.SpinButton(adjustment=self.wpm_adj, valign=Gtk.Align.CENTER))
         speed.append(Gtk.Label(label="words per minute", css_classes=["dim-label"]))
         self.mode_detail.add_named(speed, "fixed")
+        missing = Gtk.Box(spacing=10, halign=Gtk.Align.CENTER)
+        self.missing_label = Gtk.Label(css_classes=["dim-label", "numeric"], visible=False)  # download progress
+        missing.append(self.missing_label)
+        get = Gtk.Button(label="Choose a Speech Model…", valign=Gtk.Align.CENTER, css_classes=["suggested-action"])
+        get.connect("clicked", lambda *_: self.show_models())
+        missing.append(get)
+        self.mode_detail.add_named(missing, "missing")
         page.append(self.mode_detail)
 
         self.text = Gtk.TextView(editable=False, cursor_visible=False, wrap_mode=Gtk.WrapMode.WORD_CHAR,
@@ -228,9 +237,14 @@ class ControlWindow(Adw.ApplicationWindow):
                                          model=Gtk.StringList.new([name for _, name in LANGUAGES]))
         self.language_row.connect("notify::selected", self._speech_picked)
         self.voice_group.add(self.language_row)
-        self.model_row = Adw.ComboRow(title="Speech model", model=Gtk.StringList.new([name for _, name in MODELS]))
-        self.model_row.connect("notify::selected", self._speech_picked)
+        self.model_row = Adw.ActionRow(title="Speech model", activatable=True, use_markup=False)
+        self.model_row.add_suffix(Gtk.Image(icon_name="go-next-symbolic"))
+        self.model_row.connect("activated", lambda *_: self.show_models())
         self.voice_group.add(self.model_row)
+        self.device_row = Adw.ComboRow(title="Run on", subtitle="Processor keeps the graphics card free",
+                                       model=Gtk.StringList.new([label for _, label in DEVICES]))
+        self.device_row.connect("notify::selected", self._device_picked)
+        self.voice_group.add(self.device_row)
         page.add(self.voice_group)
 
         group = Adw.PreferencesGroup(title="Text", description="How the script looks on the Prompter")
@@ -478,7 +492,8 @@ class ControlWindow(Adw.ApplicationWindow):
         self.play.set_icon_name("media-playback-pause-symbolic" if playing else "media-playback-start-symbolic")
         self.play.set_tooltip_text("Pause (Space)" if playing else "Start (Space)")
         self.mode.set_active_name("voice" if voice else "fixed")
-        self.mode_detail.set_visible_child_name("voice" if voice else "fixed")
+        self._voice = voice
+        self._show_mode_detail()
         self.wpm_adj.set_value(wpm)
         self.size_adj.set_value(font_size)
         self.size_label.set_label(f"{font_size} px")
@@ -584,23 +599,60 @@ class ControlWindow(Adw.ApplicationWindow):
         real = [_realpath(p) for p in self._camera_paths]
         self._set_combo(self.camera_row, labels, real, _realpath(current) if current else None)
 
-    def set_speech(self, language, model):
-        if model not in self._models:
-            self._models.append(model)
-            self.model_row.get_model().append(model)
+    def set_speech(self, language, model, device):
         self._updating = True
         codes = [code for code, _ in LANGUAGES]
         self.language_row.set_selected(codes.index(language) if language in codes else 0)
-        self.model_row.set_selected(self._models.index(model))
+        devices = [code for code, _ in DEVICES]
+        self.device_row.set_selected(devices.index(device) if device in devices else 0)
+        self.model_row.set_subtitle(models.title(model))
         self._updating = False
+        if self.models_dialog:  # after this: the change may have come from one of its rows
+            self.models_dialog.language_name = self._language_name()
+            GLib.idle_add(lambda: self.models_changed() and False)
 
-    def set_engine(self, engine):
-        if engine is None:
+    def set_engine(self, engine, missing=None):
+        """engine: (model, device) when it's running; missing: the model it needs, when there's none."""
+        self._missing = missing is not None
+        self._show_mode_detail()
+        if missing:
+            self.voice_group.set_description(
+                f"Needs a speech model for {self._language_name()}: choose Speech model to download one")
+        elif engine is None:
             self.voice_group.set_description("Loading the speech model…")
         else:
             model, device = engine
-            where = "on the GPU" if device == "cuda" else "on the CPU (slower: an NVIDIA GPU is recommended)"
-            self.voice_group.set_description(GLib.markup_escape_text(f"Running {model} {where}"))
+            where = "on the graphics card" if device == "cuda" else "on the processor (an NVIDIA graphics card follows more closely)"
+            self.voice_group.set_description(GLib.markup_escape_text(f"Running {models.title(model)} {where}"))
+
+    def show_models(self):
+        if self.models_dialog is None:
+            self.models_dialog = ModelsDialog(self.app, self._language_name())
+            self.models_dialog.connect("closed", lambda *_: setattr(self, "models_dialog", None))
+        self.models_dialog.present(self)
+
+    def set_download(self, name, fraction):
+        if self.models_dialog:
+            self.models_dialog.set_download(name, fraction)
+        self.missing_label.set_visible(name is not None)
+        self.missing_label.set_label(f"Downloading… {fraction:.0%}")
+
+    def models_changed(self):
+        if self.models_dialog:
+            self.models_dialog.refresh()
+
+    def models_message(self, text):
+        if self.models_dialog:
+            self.models_dialog.message(text)
+        else:
+            self.set_status(text)
+
+    def _show_mode_detail(self):
+        self.mode_detail.set_visible_child_name("fixed" if not self._voice else "missing" if self._missing else "voice")
+
+    def _language_name(self):
+        selected = self.language_row.get_selected()
+        return LANGUAGES[selected if selected < len(LANGUAGES) else 0][1]
 
     def _set_combo(self, row, labels, values, current):
         """Replace a dropdown's choices only if they changed: rebuilding the list re-emits
@@ -675,9 +727,13 @@ class ControlWindow(Adw.ApplicationWindow):
         if not self._updating and 0 <= row.get_selected() < len(self._camera_paths):
             self.app.set_camera(self._camera_paths[row.get_selected()])
 
-    def _speech_picked(self, _row, _pspec):
-        if not self._updating:
-            self.app.set_speech(LANGUAGES[self.language_row.get_selected()][0], self._models[self.model_row.get_selected()])
+    def _speech_picked(self, row, _pspec):
+        if not self._updating and 0 <= row.get_selected() < len(LANGUAGES):
+            self.app.set_speech(language=LANGUAGES[row.get_selected()][0])
+
+    def _device_picked(self, row, _pspec):
+        if not self._updating and 0 <= row.get_selected() < len(DEVICES):
+            self.app.set_speech(device=DEVICES[row.get_selected()][0])
 
     def _choose_folder(self, *_):
         dialog = Gtk.FileDialog(title="Choose the Scripts Folder", modal=True,

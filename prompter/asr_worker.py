@@ -2,8 +2,9 @@
 
 Captures the mic with pw-record and, while there is speech, re-transcribes the last few
 seconds with Whisper several times a second: on an NVIDIA GPU if there is one, otherwise on
-the CPU with a lighter model. Talks JSON lines:
-  stdout: {"type": "ready"|"level"|"hyp"|"error", ...}
+the CPU. Only loads a model that's already on this computer: it never downloads one, and
+says "missing" instead (the app offers the download). Talks JSON lines:
+  stdout: {"type": "ready"|"missing"|"level"|"hyp"|"error", ...}
   stdin:  {"cmd": "listen"|"pause"|"prompt"|"quit", ...}
 """
 
@@ -17,12 +18,10 @@ import wave
 
 import numpy as np
 
+from .models import resolve
+
 RATE = 16000
 BLOCK = RATE // 10  # 100 ms, the unit for levels and the speech gate
-
-# model "auto": accurate and fast on a GPU; on a CPU, small enough to keep up in real time
-AUTO_MODELS = {("cuda", True): "distil-large-v3", ("cuda", False): "large-v3-turbo",
-               ("cpu", True): "small.en", ("cpu", False): "small"}
 
 
 def emit(**msg):
@@ -110,21 +109,25 @@ class Recorder:
             self.samples += len(samples)
 
 
-def load_model(WhisperModel, requested, language):
-    """(model, device, model name): CUDA when it works, else the CPU."""
+def load_model(choice, language, prefer):
+    """(model, device, model name), loaded from this computer: on the GPU when it works and
+    prefer allows it ("auto", "cuda" or "cpu"), else the CPU. None, after saying "missing",
+    when the model isn't downloaded."""
     import ctranslate2
 
-    english = language == "en"
-    devices = (["cuda"] if ctranslate2.get_cuda_device_count() > 0 else []) + ["cpu"]
-    for device in devices:
-        name = AUTO_MODELS[(device, english)] if requested == "auto" else requested
+    gpu = prefer != "cpu" and ctranslate2.get_cuda_device_count() > 0
+    if prefer == "cuda" and not gpu:
+        emit(type="error", msg="No NVIDIA graphics card found: using the processor")
+    for device in (["cuda"] if gpu else []) + ["cpu"]:
+        name, path = resolve(choice, language, device)
+        if path is None:
+            emit(type="missing", model=name, device=device)
+            return None
+        from faster_whisper import WhisperModel
+
         compute = "float16" if device == "cuda" else "int8"
         try:
-            try:  # cached models load offline: no network unless the model was never downloaded
-                return WhisperModel(name, device=device, compute_type=compute, local_files_only=True), device, name
-            except Exception:
-                emit(type="status", msg=f"Getting the {name} speech model…")
-                return WhisperModel(name, device=device, compute_type=compute), device, name
+            return WhisperModel(str(path), device=device, compute_type=compute), device, name
         except Exception as e:  # e.g. CUDA present but its libraries aren't: fall back to the CPU
             if device == "cpu":
                 raise
@@ -141,7 +144,8 @@ def block_rms(audio):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--model", default="auto", help='a faster-whisper model name, or "auto"')
+    ap.add_argument("--model", default="auto", help='"auto", a model name (prompter.models) or a model folder')
+    ap.add_argument("--device", default="auto", choices=("auto", "cuda", "cpu"), help="where to run it")
     ap.add_argument("--language", default="en", help="ISO 639-1 code of the language being read")
     ap.add_argument("--mic", help="PipeWire node to record from (default source if omitted)")
     ap.add_argument("--file", help="16 kHz mono WAV to play instead of the mic")
@@ -152,9 +156,10 @@ def main():
     ap.add_argument("--debug", action="store_true", help="report ticks skipped by the speech gate")
     args = ap.parse_args()
 
-    from faster_whisper import WhisperModel
-
-    model, device, name = load_model(WhisperModel, args.model, args.language)
+    loaded = load_model(args.model, args.language, args.device)
+    if loaded is None:
+        return  # not downloaded: the app offers it
+    model, device, name = loaded
     model.transcribe(np.zeros(RATE, np.float32), language=args.language, beam_size=1)
 
     ring, stop, recorder = Ring(12), threading.Event(), Recorder(args.record)

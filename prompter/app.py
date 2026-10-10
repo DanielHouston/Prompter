@@ -19,7 +19,8 @@ from . import APP_ID, displays  # noqa: E402
 from . import script as scripts  # noqa: E402
 from .actions import ACTIONS, GLOBAL_ONLY, KEYS  # noqa: E402
 from .aligner import Aligner  # noqa: E402
-from .asr import AsrWorker  # noqa: E402
+from . import models  # noqa: E402
+from .asr import AsrWorker, ModelDownload  # noqa: E402
 from .audio import microphones  # noqa: E402
 from .camera import CameraFeed, cameras  # noqa: E402
 from .control import ControlWindow  # noqa: E402
@@ -38,7 +39,8 @@ DEFAULTS = {
     "wpm": 140,
     "mode": "voice",  # or "fixed"
     "language": "en",  # what you read in (ISO 639-1)
-    "model": "auto",  # faster-whisper model; "auto" picks by language and GPU/CPU
+    "model": "auto",  # "auto" (the best downloaded one), a name from prompter.models, or a model folder
+    "device": "auto",  # where the speech model runs: auto | cuda | cpu
     "mic": None,  # PipeWire node name; None = default source
     "display": None,  # monitor connector for the script; None = find the Elgato Prompter
     "positions": {},  # script path -> token index, to resume where you left off
@@ -71,6 +73,9 @@ class PrompterApp(Adw.Application):
         self.status = "Starting…"
         self.session = None
         self.engine = None  # (model, device) once the speech engine is ready
+        self.missing = None  # the model voice follow needs but isn't downloaded (for "auto", the one to get)
+        self.device = None  # where the engine last ran or would run: "cuda" or "cpu"
+        self.download = None  # the model download in progress, if any
         self._events = None
         self._rate = deque()  # (monotonic time, position) while voice-following
         self._primed_at = -100
@@ -101,7 +106,7 @@ class PrompterApp(Adw.Application):
         self.control = ControlWindow(self)
         self.control.set_style(self.config["appearance"], self.config["crosshair"])
         self.control.set_preview(self.config["preview"])
-        self.control.set_speech(self.config["language"], self.config["model"])
+        self.control.set_speech(self.config["language"], self.config["model"], self.config["device"])
         # Closing the control window only hides it: the tray brings it back
         self.tray = Tray(self.get_application_id(), "Prompter", resources.files("prompter") / "data" / f"{APP_ID}.svg",
                          self._tray_clicked, lambda: self.activate_action("toggle"))
@@ -137,6 +142,7 @@ class PrompterApp(Adw.Application):
         self.control.present()
 
     def do_shutdown(self):
+        self.cancel_download()
         self._save()
         self.asr.stop()
         self.camera.stop()
@@ -362,9 +368,9 @@ class PrompterApp(Adw.Application):
             args += ["--record", str(self.session / "mic.wav"), "--debug"]
         self.asr.extra_args = args
         self.asr_ready = False
-        self.engine = None
+        self.engine = self.missing = None
         self.control.set_engine(None)
-        self.asr.start(self.config["model"], self.config["mic"], self.config["language"])
+        self.asr.start(self.config["model"], self.config["mic"], self.config["language"], self.config["device"])
         self._sync_state()
 
     def _asr_message(self, msg):
@@ -372,6 +378,7 @@ class PrompterApp(Adw.Application):
         if kind == "ready":
             self.asr_ready = True
             self.engine = (msg.get("model"), msg.get("device"))
+            self.device = msg.get("device")
             self.control.set_engine(self.engine)
             self._primed_at = -100
             self.set_pos(self.pos, prime=True)
@@ -387,18 +394,61 @@ class PrompterApp(Adw.Application):
                 self._set_status(f"Listening · {msg['ms']} ms")
         elif kind == "gate":
             self._log(**msg)
+        elif kind == "missing":
+            self.missing, self.device = msg.get("model"), msg.get("device")
+            self.control.set_engine(None, missing=self.missing)
+            self._sync_state()
         elif kind == "status":
             self._set_status(msg["msg"])
         elif kind == "error":
             self.asr_ready = self.asr.proc is not None
             self._set_status(msg["msg"])
 
-    def set_speech(self, language, model):
-        if (language, model) == (self.config["language"], self.config["model"]):
+    def set_speech(self, **changes):
+        """language, model and/or device: restarts the speech engine with them."""
+        changes = {k: v for k, v in changes.items() if self.config[k] != v}
+        if not changes:
             return
-        self.config["language"], self.config["model"] = language, model
+        self.config.update(changes)
+        self.control.set_speech(self.config["language"], self.config["model"], self.config["device"])
         self._save_soon()
         self._start_asr()
+
+    def speech_device(self):
+        """Where the speech model runs, or would: what to recommend downloading for."""
+        if self.config["device"] == "cpu":
+            return "cpu"
+        return self.device or ("cuda" if Path("/proc/driver/nvidia/version").exists() else "cpu")
+
+    # --- speech models: only ever downloaded when you ask -------------------
+
+    def download_model(self, name):
+        if self.download:
+            return
+        self.download = ModelDownload(name, lambda f: self.control.set_download(name, f), self._downloaded)
+        self.control.set_download(name, 0.0)
+
+    def cancel_download(self):
+        if self.download:
+            self.download.cancel()
+
+    def _downloaded(self, error):
+        name, self.download = self.download.name, None
+        self.control.set_download(None, 0.0)
+        if error:
+            self.control.models_message(f"Couldn't download {models.BY_NAME[name].label}: {error}")
+        self.control.models_changed()
+        if error is None and (self.missing or self.config["model"] == name):
+            self._start_asr()  # now there's something to run
+
+    def delete_model(self, name):
+        try:
+            models.delete(name)
+        except Exception as e:  # e.g. permissions in the Hugging Face cache
+            self.control.models_message(f"Couldn't delete it: {e}")
+        self.control.models_changed()
+        if self.engine and self.engine[0] == name:
+            self._start_asr()  # "auto" moves on to another, or asks for one
 
     def set_mic(self, name):
         if name == self.config["mic"]:
@@ -664,7 +714,9 @@ class PrompterApp(Adw.Application):
             self.asr.pause()
         self.view.set_running(self.playing and not voice)
         self.control.set_state(self.playing, voice, self.config["wpm"], self.config["font_size"])
-        if voice and not self.asr_ready:
+        if voice and self.missing:
+            self._set_status("Voice follow needs a speech model")
+        elif voice and not self.asr_ready:
             if self.asr.proc is not None:
                 self._set_status("Loading the speech model…")
         elif not self.playing:

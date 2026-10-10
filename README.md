@@ -54,8 +54,21 @@ Leave out `[cuda]` if you don't have an NVIDIA GPU. `--system-site-packages` let
 your distribution's GTK bindings. `--install-desktop` adds Prompter to your app launcher,
 and your desktop needs that entry before it will grant global shortcuts.
 
-The first time voice follow starts it downloads its speech model to
-`~/.cache/huggingface`: about 1.5 GB on a GPU, less on the CPU.
+Prompter doesn't download anything by itself. Voice follow needs a speech model, which you
+pick under Setup → Voice follow → **Speech model**: each one's size is listed (from 78 MB to
+3.1 GB), one is marked as recommended for your computer, and nothing downloads until you
+click Download. Models are kept in `~/.local/share/prompter/models`; any already in the
+Hugging Face cache are used where they are. Fixed speed needs no model at all.
+
+### Speech models
+
+- **Automatic** uses the best model you've downloaded for your language and computer.
+- **Run on** chooses the graphics card or the processor. The processor keeps an NVIDIA card
+  free (for a game, say), with a smaller model so it keeps up.
+- **Your own model:** any faster-whisper (CTranslate2) Whisper model works, such as one
+  fine-tuned for your language. Download it yourself, for example with
+  `hf download <repo> --local-dir ~/Models/my-whisper`, then choose Speech model → **Use a
+  Model Folder…**.
 
 ## Using it
 
@@ -140,8 +153,9 @@ Only the Prompter's bus is opened up, not your GPU's.
   limitation: it can't yet hand NVIDIA-rendered frames to DisplayLink displays. The fix is
   in progress in [hyprwm/aquamarine#279](https://github.com/hyprwm/aquamarine/pull/279).
   KDE Plasma and GNOME work today.
-- **Voice follow lags:** Setup → Voice follow shows whether the model runs on the GPU or
-  the CPU. On the CPU, "Small" models keep up best.
+- **Voice follow lags:** Setup → Voice follow shows which model is running, and on the
+  graphics card or the processor. On the processor, pick a model marked "fine on a
+  processor".
 - The speech engine logs to `~/.cache/prompter/asr.log`.
 - **Bug reports about tracking:** turn on Setup → Diagnostics → *Save sessions for
   tuning*, read the part that goes wrong, and attach the session folder from
@@ -149,9 +163,10 @@ Only the Prompter's bus is opened up, not your GPU's.
 
 ## Privacy
 
-Everything runs on your machine. Your voice is never sent anywhere; the only network
-access is downloading a speech model the first time it's needed (from Hugging Face). Session recordings are off unless you turn
-them on, stay local, and can be deleted from Setup.
+Everything runs on your machine. Your voice is never sent anywhere. Prompter only goes
+online when you click Download for a speech model (from Hugging Face), and the speech engine
+runs with Hugging Face's offline mode on, so it can't fetch anything by itself. Session
+recordings are off unless you turn them on, stay local, and can be deleted from Setup.
 
 ## Development
 
