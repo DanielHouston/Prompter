@@ -30,8 +30,7 @@ Not affiliated with or endorsed by Elgato or Corsair.
 ## Requirements
 
 - An **Elgato Prompter**, with the **DisplayLink driver** for Linux (`evdi` plus
-  DisplayLink Manager) installed and running. On Arch it's the AUR `displaylink`
-  package; for other distributions see Synaptics' DisplayLink downloads.
+  DisplayLink Manager) installed and running.
 - A **Wayland** desktop: GNOME, KDE Plasma, Hyprland, Sway and others.
 - An **NVIDIA GPU is recommended** for voice follow. Without one it runs on the CPU with
   a smaller model, which tracks less closely.
@@ -124,20 +123,6 @@ sudo udevadm control --reload && sudo modprobe i2c-dev
 ```
 
 Only the Prompter's bus is opened up, not your GPU's.
-
-### Camera self-view
-
-Pick the camera under Setup → Camera self-view. A V4L2 camera can usually be read by
-only one app at a time, so if Zoom or OBS is already using it, give the prompter a copy of
-its own. One way is a second [v4l2loopback](https://github.com/v4l2loopback/v4l2loopback)
-device fed from the same ffmpeg that feeds your call:
-
-```sh
-ffmpeg -i <camera source> -filter_complex "split=2[call][self];[self]scale=480:270[small]" \
-  -map "[call]" -f v4l2 /dev/video10 -map "[small]" -f v4l2 /dev/video11
-```
-
-Point your call app at `/dev/video10` and Prompter at `/dev/video11`.
 
 ## Troubleshooting
 
