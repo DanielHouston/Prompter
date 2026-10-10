@@ -9,7 +9,7 @@ from prompter import APP_ID, displays  # noqa: E402
 from prompter.actions import ACTIONS, GLOBAL_ONLY, KEYS  # noqa: E402
 from prompter.fontpicker import closest, for_language  # noqa: E402
 from prompter.readouts import Clock, Stopwatch, duration  # noqa: E402
-from prompter.tray import SEPARATOR, MenuItem, _pixmaps  # noqa: E402
+from prompter.tray import SEPARATOR, MenuItem, _pixmap_variant, _pixmaps  # noqa: E402
 from prompter.view import GAP, PAD, place_readouts  # noqa: E402
 
 
@@ -124,6 +124,9 @@ class TrayTest(unittest.TestCase):
         self.assertEqual([(w, h, len(d)) for w, h, d in pixmaps], [(s, s, s * s * 4) for s in (22, 32, 48, 64)])
         alpha = pixmaps[1][2][0::4]  # ARGB: alpha first
         self.assertEqual((min(alpha), max(alpha)), (0, 255))
+        from gi.repository import GLib
+        self.assertTrue(_pixmap_variant(pixmaps).equal(GLib.Variant("a(iiay)", pixmaps)))
+        self.assertEqual(_pixmap_variant([]).get_type_string(), "a(iiay)")
 
 
 class ReadoutsTest(unittest.TestCase):

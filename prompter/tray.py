@@ -132,7 +132,7 @@ class Tray:
     def __init__(self, app_id, title, icon_file, on_activate, on_secondary=None):
         self.app_id, self.title = app_id, title
         self.on_activate, self.on_secondary = on_activate, on_secondary
-        self.pixmaps = _pixmaps(icon_file)
+        self.pixmaps = _pixmap_variant(_pixmaps(icon_file))  # built once: it never changes
         self.tooltip = ""
         self.items = []  # ids are positions + 1; 0 is the root
         self.revision = 1
@@ -193,22 +193,25 @@ class Tray:
     # --- StatusNotifierItem --------------------------------------------------
 
     def _item_property(self, _bus, _sender, _path, _interface, name):
-        values = {
-            "Category": GLib.Variant("s", "ApplicationStatus"),
-            "Id": GLib.Variant("s", self.app_id),
-            "Title": GLib.Variant("s", self.title),
-            "Status": GLib.Variant("s", "Active"),
-            "WindowId": GLib.Variant("i", 0),
-            "IconName": GLib.Variant("s", self.app_id),  # from the icon theme once installed; else the pixmaps
-            "IconPixmap": GLib.Variant("a(iiay)", self.pixmaps),
-            "IconThemePath": GLib.Variant("s", ""),
-            "ToolTip": GLib.Variant("(sa(iiay)ss)", ("", [], self.title, GLib.markup_escape_text(self.tooltip))),
-            "ItemIsMenu": GLib.Variant("b", False),
-            "Menu": GLib.Variant("o", MENU_PATH),
-        }
-        if name in values:
-            return values[name]
-        return GLib.Variant("a(iiay)", []) if name.endswith("Pixmap") else GLib.Variant("s", "")
+        """Called once per property, on the main thread: trays read them all whenever anything
+        changes, so each has to be quick."""
+        if name == "IconPixmap":
+            return self.pixmaps
+        if name == "ToolTip":
+            return GLib.Variant("(sa(iiay)ss)", ("", [], self.title, GLib.markup_escape_text(self.tooltip)))
+        if name.endswith("Pixmap"):
+            return GLib.Variant("a(iiay)", [])
+        value = {
+            "Category": ("s", "ApplicationStatus"),
+            "Id": ("s", self.app_id),
+            "Title": ("s", self.title),
+            "Status": ("s", "Active"),
+            "WindowId": ("i", 0),
+            "IconName": ("s", self.app_id),  # from the icon theme once installed; else the pixmaps
+            "ItemIsMenu": ("b", False),
+            "Menu": ("o", MENU_PATH),
+        }.get(name, ("s", ""))
+        return GLib.Variant(*value)
 
     def _item_call(self, _bus, _sender, _path, _interface, method, _params, invocation):
         invocation.return_value(None)
@@ -285,6 +288,16 @@ def _export(bus, path, interface, on_call, on_property):
 
 def _once(callback):
     return lambda: callback() and False
+
+
+def _pixmap_variant(pixmaps):
+    """a(iiay) built straight from the bytes. GLib.Variant("a(iiay)", pixmaps) makes a Python
+    object per byte: about 0.1 s for these icons, which blocked the app for seconds at startup
+    while every tray read every property."""
+    return GLib.Variant.new_array(GLib.VariantType("(iiay)"), [
+        GLib.Variant.new_tuple(GLib.Variant("i", w), GLib.Variant("i", h),
+                               GLib.Variant.new_from_bytes(GLib.VariantType("ay"), GLib.Bytes.new(data), True))
+        for w, h, data in pixmaps])
 
 
 def _pixmaps(icon_file):
