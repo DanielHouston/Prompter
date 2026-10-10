@@ -1,0 +1,4 @@
+# Let the logged-in user set the Elgato Prompter's brightness and contrast (DDC/CI).
+# The DisplayLink driver (evdi) exposes the Prompter's DDC channel as this I2C bus;
+# only this bus is opened up, not the GPU's.
+SUBSYSTEM=="i2c-dev", ATTR{name}=="DisplayLink I2C Adapter", TAG+="uaccess"

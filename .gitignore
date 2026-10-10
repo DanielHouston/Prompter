@@ -1,0 +1,9 @@
+# local development only
+tools/
+bin/
+.venv/
+
+__pycache__/
+*.egg-info/
+build/
+dist/

@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Prompter
+GenericName=Teleprompter
+Comment=Voice-following teleprompter for the Elgato Prompter
+Exec=prompter
+Icon=io.github.DanielHouston.Prompter
+Terminal=false
+Categories=AudioVideo;Video;Utility;
+Keywords=teleprompter;autocue;elgato;script;
+StartupNotify=true

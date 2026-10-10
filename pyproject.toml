@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "prompter"
+description = "Voice-following teleprompter for the Elgato Prompter on Linux (Wayland)"
+readme = "README.md"
+license = "GPL-3.0-or-later"
+authors = [{ name = "Daniel Houston" }]
+requires-python = ">=3.11"
+dynamic = ["version"]
+# PyGObject, GTK 4 and libadwaita come from the distribution (see README), not from pip
+dependencies = ["faster-whisper>=1.1", "numpy"]
+
+[project.optional-dependencies]
+# CUDA 12 runtime libraries for faster-whisper on NVIDIA GPUs, independent of any system CUDA
+cuda = ["nvidia-cublas-cu12", "nvidia-cudnn-cu12"]
+
+[project.scripts]
+prompter = "prompter.__main__:main"
+prompterctl = "prompter.ctl:main"
+
+[project.urls]
+Homepage = "https://github.com/DanielHouston/prompter"
+Issues = "https://github.com/DanielHouston/prompter/issues"
+
+[tool.setuptools]
+packages = ["prompter"]
+
+[tool.setuptools.dynamic]
+version = { attr = "prompter.__version__" }
+
+[tool.setuptools.package-data]
+prompter = ["data/*"]

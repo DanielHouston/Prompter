@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="body" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2d3342"/>
+      <stop offset="1" stop-color="#161a22"/>
+    </linearGradient>
+    <linearGradient id="glass" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3fb6a8" stop-opacity="0.24"/>
+      <stop offset="1" stop-color="#3fb6a8" stop-opacity="0.05"/>
+    </linearGradient>
+    <radialGradient id="lens" cx="0.4" cy="0.35" r="0.7">
+      <stop offset="0" stop-color="#5a6b8c"/>
+      <stop offset="0.55" stop-color="#1b2030"/>
+      <stop offset="1" stop-color="#0b0d12"/>
+    </radialGradient>
+  </defs>
+  <rect x="10" y="15" width="108" height="104" rx="20" fill="#000" opacity="0.2"/>
+  <rect x="10" y="10" width="108" height="104" rx="20" fill="url(#body)"/>
+  <rect x="10.5" y="10.5" width="107" height="103" rx="19.5" fill="none" stroke="#fff" stroke-opacity="0.08"/>
+
+  <rect x="22" y="22" width="84" height="64" rx="9" fill="url(#glass)" stroke="#3fb6a8" stroke-opacity="0.55" stroke-width="2"/>
+  <rect x="33" y="32" width="46" height="6" rx="3" fill="#e6e9ef" opacity="0.32"/>
+  <rect x="33" y="45" width="62" height="6" rx="3" fill="#e6e9ef"/>
+  <rect x="33" y="58" width="54" height="6" rx="3" fill="#e6e9ef" opacity="0.9"/>
+  <rect x="33" y="71" width="36" height="6" rx="3" fill="#e6e9ef" opacity="0.8"/>
+  <rect x="26" y="43" width="3.5" height="10" rx="1.75" fill="#3fb6a8"/>
+
+  <circle cx="64" cy="100" r="8.5" fill="#0b0d12" stroke="#3fb6a8" stroke-opacity="0.7" stroke-width="2"/>
+  <circle cx="64" cy="100" r="5.5" fill="url(#lens)"/>
+  <circle cx="62" cy="98" r="1.4" fill="#fff" opacity="0.7"/>
+</svg>

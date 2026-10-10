@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.DanielHouston.Prompter</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <name>Prompter</name>
+  <summary>Voice-following teleprompter for the Elgato Prompter</summary>
+  <description>
+    <p>
+      Prompter turns an Elgato Prompter into a teleprompter on Linux. It listens to your
+      microphone and scrolls the script along as you speak, or at a fixed speed.
+    </p>
+    <ul>
+      <li>Scripts are Markdown files; headings become sections you can jump between</li>
+      <li>Voice follow runs Whisper speech recognition locally, best on an NVIDIA GPU</li>
+      <li>Eye-line crosshair, camera self-view, and the Prompter's own brightness control</li>
+      <li>Global shortcuts through your desktop's shortcuts portal</li>
+    </ul>
+  </description>
+  <launchable type="desktop-id">io.github.DanielHouston.Prompter.desktop</launchable>
+  <url type="homepage">https://github.com/DanielHouston/prompter</url>
+  <url type="bugtracker">https://github.com/DanielHouston/prompter/issues</url>
+  <developer id="io.github.DanielHouston">
+    <name>Daniel Houston</name>
+  </developer>
+  <provides>
+    <binary>prompter</binary>
+    <binary>prompterctl</binary>
+  </provides>
+  <requires>
+    <display_length compare="ge">600</display_length>
+  </requires>
+  <supports>
+    <control>keyboard</control>
+    <control>pointing</control>
+  </supports>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="0.1.0" date="2026-10-10"/>
+  </releases>
+</component>
