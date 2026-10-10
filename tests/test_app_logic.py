@@ -1,7 +1,13 @@
 import unittest
 
-from prompter import APP_ID, displays
-from prompter.actions import ACTIONS, GLOBAL_ONLY, KEYS
+import gi
+
+gi.require_version("Pango", "1.0")
+from gi.repository import Pango  # noqa: E402
+
+from prompter import APP_ID, displays  # noqa: E402
+from prompter.actions import ACTIONS, GLOBAL_ONLY, KEYS  # noqa: E402
+from prompter.fontpicker import closest, for_language  # noqa: E402
 
 
 class FakeMonitor:
@@ -69,6 +75,70 @@ class ActionsTest(unittest.TestCase):
 
     def test_app_id_is_reverse_dns(self):
         self.assertRegex(APP_ID, r"^[A-Za-z_][\w]*(\.[A-Za-z_][\w]*){2,}$")
+
+
+class FontPickerTest(unittest.TestCase):
+    def faces(self, *names):
+        return [Pango.FontDescription.from_string(n) for n in names]
+
+    def test_keeps_weight_across_families(self):
+        faces = self.faces("Sans Light", "Sans", "Sans Medium", "Sans Bold", "Sans Medium Italic")
+        self.assertEqual(closest(faces, Pango.Weight.MEDIUM, Pango.Style.NORMAL), 2)
+
+    def test_nearest_weight_when_missing(self):
+        faces = self.faces("Serif", "Serif Bold", "Serif Italic")
+        self.assertEqual(closest(faces, Pango.Weight.MEDIUM, Pango.Style.NORMAL), 0)
+        self.assertEqual(closest(faces, Pango.Weight.HEAVY, Pango.Style.NORMAL), 1)
+
+    def test_slant_matters_more_than_weight(self):
+        faces = self.faces("Sans Bold", "Sans Light Italic")
+        self.assertEqual(closest(faces, Pango.Weight.BOLD, Pango.Style.ITALIC), 1)
+
+    def test_lists_fonts_that_write_the_language(self):
+        latin = "abcdefghijklmnopqrstuvwxyz"
+        context = FakeFontContext({"Latin": latin + latin.upper(), "Adlam": "𞤀𞤁", "Symbols": "★"})
+        names = [f.get_name() for f in for_language(context, context.families, "en")]
+        self.assertEqual(names, ["Latin"])
+        names = [f.get_name() for f in for_language(context, context.families, "en", keep="Adlam")]
+        self.assertEqual(names, ["Latin", "Adlam"])  # the current font stays, so the list can start on it
+        names = [f.get_name() for f in for_language(context, context.families, "ru", keep="Latin")]
+        self.assertEqual(names, ["Latin", "Adlam", "Symbols"])  # nothing writes Russian: list everything
+
+
+class FakeFontContext:
+    """A Pango context whose fonts have the given characters."""
+
+    def __init__(self, chars):
+        self.chars = chars
+        self.families = [FakeFamily(name) for name in chars]
+
+    def get_font_map(self):
+        return self
+
+    def load_font(self, _context, desc):
+        return FakeFont(self.chars[desc.get_family()])
+
+
+class FakeFamily:
+    def __init__(self, name):
+        self.name = name
+
+    def get_name(self):
+        return self.name
+
+    def get_face(self, _name):
+        return self
+
+    def describe(self):
+        return Pango.FontDescription.from_string(self.name)
+
+
+class FakeFont:
+    def __init__(self, chars):
+        self.chars = chars
+
+    def has_char(self, char):
+        return char in self.chars
 
 
 if __name__ == "__main__":

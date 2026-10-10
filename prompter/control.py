@@ -18,6 +18,7 @@ gi.require_version("Adw", "1")
 from gi.repository import Adw, Gdk, Gio, GLib, Gtk, Pango  # noqa: E402
 
 from .actions import GLOBAL_ONLY, KEYS  # noqa: E402
+from .fontpicker import FontPicker  # noqa: E402
 from .view import rgba  # noqa: E402
 
 CORNERS = (("top-right", "Top right"), ("top-left", "Top left"), ("bottom-right", "Bottom right"), ("bottom-left", "Bottom left"))
@@ -46,6 +47,7 @@ class ControlWindow(Adw.ApplicationWindow):
         super().__init__(application=app, title="Prompter Control", default_width=560, default_height=820)
         self.app = app
         self._updating = False
+        self._font = ""
         self._token_chars, self._token_blocks, self._block_chars = [], [], []
         self._mic_names = [None]
         self._camera_paths = []
@@ -226,8 +228,9 @@ class ControlWindow(Adw.ApplicationWindow):
         reset = Gtk.Button(label="Reset", valign=Gtk.Align.CENTER, css_classes=["flat"])
         reset.connect("clicked", lambda *_: self.app.reset_style())
         group.set_header_suffix(reset)
-        self.font = Gtk.FontDialogButton(dialog=Gtk.FontDialog(), level=Gtk.FontLevel.FACE, valign=Gtk.Align.CENTER)
-        self.font.connect("notify::font-desc", self._font_picked)
+        self.font = Gtk.Button(valign=Gtk.Align.CENTER,
+                               child=Gtk.Label(ellipsize=Pango.EllipsizeMode.END, max_width_chars=24))
+        self.font.connect("clicked", self._pick_font)
         group.add(_suffix_row("Font", self.font))
         group.add(Adw.SpinRow(title="Size", subtitle="Pixels", adjustment=self.size_adj))
         group.add(self._spin_row("appearance", "line_spacing", "Line spacing", None, 0.9, 2.0, 0.05, 2))
@@ -457,7 +460,9 @@ class ControlWindow(Adw.ApplicationWindow):
 
     def set_style(self, appearance, crosshair):
         self._updating = True
-        self.font.set_font_desc(Pango.FontDescription.from_string(appearance["font"]))
+        self._font = appearance["font"]
+        self.font.get_child().set_label(self._font)
+        self.font.set_tooltip_text(self._font)
         values = {"appearance": appearance, "crosshair": crosshair}
         for (group, key), button in self.colors.items():
             button.set_rgba(rgba(values[group][key]))
@@ -640,12 +645,10 @@ class ControlWindow(Adw.ApplicationWindow):
         if not self._updating and 0 <= row.get_selected() < len(self._mic_names):
             self.app.set_mic(self._mic_names[row.get_selected()])
 
-    def _font_picked(self, button, _pspec):
-        if self._updating or not button.get_font_desc():
-            return
-        desc = button.get_font_desc().copy()
-        desc.unset_fields(Pango.FontMask.SIZE)  # size has its own control
-        self.app.set_style("appearance", "font", desc.to_string())
+    def _pick_font(self, _button):
+        selected = self.language_row.get_selected()
+        language, name = LANGUAGES[selected if selected < len(LANGUAGES) else 0]
+        FontPicker(self._font, lambda font: self.app.set_style("appearance", "font", font), language, name).present(self)
 
     def _text_clicked(self, _gesture, _n, x, y):
         if not self._token_chars:
