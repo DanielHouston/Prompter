@@ -8,6 +8,7 @@ from gi.repository import Pango  # noqa: E402
 from prompter import APP_ID, displays  # noqa: E402
 from prompter.actions import ACTIONS, GLOBAL_ONLY, KEYS  # noqa: E402
 from prompter.fontpicker import closest, for_language  # noqa: E402
+from prompter.tray import SEPARATOR, MenuItem, _pixmaps  # noqa: E402
 
 
 class FakeMonitor:
@@ -103,6 +104,24 @@ class FontPickerTest(unittest.TestCase):
         self.assertEqual(names, ["Latin", "Adlam"])  # the current font stays, so the list can start on it
         names = [f.get_name() for f in for_language(context, context.families, "ru", keep="Latin")]
         self.assertEqual(names, ["Latin", "Adlam", "Symbols"])  # nothing writes Russian: list everything
+
+
+class TrayTest(unittest.TestCase):
+    def test_menu_items(self):
+        item = MenuItem("Show my_script", lambda: None)
+        self.assertEqual(item.props()["label"].unpack(), "Show my__script")  # not a mnemonic
+        self.assertNotIn("toggle-type", item.props())
+        checked = MenuItem("Voice Follow", lambda: None, checked=True).props()
+        self.assertEqual((checked["toggle-type"].unpack(), checked["toggle-state"].unpack()), ("checkmark", 1))
+        self.assertEqual(SEPARATOR.props()["type"].unpack(), "separator")
+        self.assertFalse(MenuItem("Start", enabled=False).props()["enabled"].unpack())
+
+    def test_icon_pixmaps(self):
+        from importlib import resources
+        pixmaps = _pixmaps(resources.files("prompter") / "data" / f"{APP_ID}.svg")
+        self.assertEqual([(w, h, len(d)) for w, h, d in pixmaps], [(s, s, s * s * 4) for s in (22, 32, 48, 64)])
+        alpha = pixmaps[1][2][0::4]  # ARGB: alpha first
+        self.assertEqual((min(alpha), max(alpha)), (0, 255))
 
 
 class FakeFontContext:

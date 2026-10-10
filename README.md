@@ -67,6 +67,10 @@ itself. The control window opens on your current screen:
 - **Setup** holds everything you set once: microphone, language, speech model, text style,
   crosshair, camera, brightness and diagnostics.
 
+Closing the control window doesn't stop Prompter: it stays in your tray (KDE Plasma, waybar
+and most other bars; GNOME needs the AppIndicator extension). Click the tray icon to bring
+the controls back, middle-click it to start or pause, and quit from its menu.
+
 Scripts live in `~/Documents/Prompter` by default (Setup → Script → Scripts folder →
 **Change…** to use another folder). A welcome script is there the first time. The folder
 button in the header bar lists your scripts, and Setup can show the folder in your file

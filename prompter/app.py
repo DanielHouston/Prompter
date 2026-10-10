@@ -26,6 +26,7 @@ from .control import ControlWindow  # noqa: E402
 from .ddc import ScreenControl  # noqa: E402
 from .script import words_of  # noqa: E402
 from .shortcuts import GlobalShortcuts  # noqa: E402
+from .tray import SEPARATOR, MenuItem, Tray  # noqa: E402
 from .view import DEFAULT_APPEARANCE, DEFAULT_CROSSHAIR, DEFAULT_PREVIEW, PrompterView  # noqa: E402
 
 CONFIG = Path(GLib.get_user_config_dir()) / "prompter" / "config.json"
@@ -97,6 +98,9 @@ class PrompterApp(Adw.Application):
         self.control.set_style(self.config["appearance"], self.config["crosshair"])
         self.control.set_preview(self.config["preview"])
         self.control.set_speech(self.config["language"], self.config["model"])
+        # Closing the control window only hides it: the tray brings it back
+        self.tray = Tray(self.get_application_id(), "Prompter", resources.files("prompter") / "data" / f"{APP_ID}.svg",
+                         self._tray_clicked, lambda: self.activate_action("toggle"))
         self.refresh_devices()
         Gdk.Display.get_default().get_monitors().connect("items-changed", lambda *_: GLib.idle_add(self._place_display))
 
@@ -236,6 +240,7 @@ class PrompterApp(Adw.Application):
         self.view.set_script(None, 0)
         self.control.set_script(None, "No script")
         self.refresh_files()
+        self._update_tray()
 
     def _load(self, pos):
         try:
@@ -250,6 +255,7 @@ class PrompterApp(Adw.Application):
         self.control.set_script(self.script, script_title(self.file.name))
         self.refresh_files()
         self.set_pos(pos, prime=True)
+        self._update_tray()
 
     def _watch_folder(self):
         if not self.folder.exists():  # first run: something to read straight away
@@ -506,6 +512,13 @@ class PrompterApp(Adw.Application):
     def on_control(self, *_):
         self.control.present()
 
+    def _tray_clicked(self):
+        """Show the controls, or hide them if they're already in front."""
+        if self.control.is_visible() and self.control.is_active():
+            self.control.set_visible(False)
+        else:
+            self.control.present()
+
     def on_open_folder(self, *_):
         """Show the scripts in the file manager. "Open containing folder" goes through the
         FileManager1 service, so it opens the real file manager even when the default app for
@@ -570,6 +583,7 @@ class PrompterApp(Adw.Application):
         else:
             self.camera.stop()
             self.control.set_camera_status("Off")
+        self._update_tray()
 
     def set_calibrating(self, on):
         """Find-the-lens mode: the Prompter goes black apart from the crosshair."""
@@ -609,6 +623,26 @@ class PrompterApp(Adw.Application):
             self._set_status(f"Scrolling at {self.config['wpm']} words per minute")
         else:
             self._set_status("Listening")
+        self._update_tray()
+
+    def _update_tray(self):
+        voice = self.mode == "voice"
+        self.tray.set_menu([
+            MenuItem("Show Controls", lambda: self.activate_action("control")),
+            SEPARATOR,
+            MenuItem("Pause" if self.playing else "Start", lambda: self.activate_action("toggle"), enabled=self.script is not None),
+            MenuItem("Voice Follow", lambda: self.activate_action("mode"), checked=voice),
+            MenuItem("Camera Self-View", lambda: self.activate_action("preview"), checked=self.config["preview"]["enabled"]),
+            SEPARATOR,
+            MenuItem("Quit", lambda: self.activate_action("quit")),
+        ])
+        if not self.playing:
+            state = "Paused"
+        elif voice:
+            state = "Following your voice"
+        else:
+            state = f"Scrolling at {self.config['wpm']} words per minute"
+        self.tray.set_tooltip(f"{script_title(self.file.name) if self.file else 'No script'} · {state}")
 
     # --- config -------------------------------------------------------------
 
