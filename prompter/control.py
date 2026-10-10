@@ -192,9 +192,17 @@ class ControlWindow(Adw.ApplicationWindow):
         self.colors, self.numbers = {}, {}
 
         group = Adw.PreferencesGroup(title="Script")
-        folder = Gtk.Button(icon_name="folder-open-symbolic", tooltip_text="Show in the file manager",
-                            action_name="app.open-folder", valign=Gtk.Align.CENTER, css_classes=["flat"])
-        group.add(_suffix_row("Scripts folder", folder, str(self.app.folder).replace(str(Path.home()), "~", 1)))
+        self.folder_row = Adw.ActionRow(title="Scripts folder", use_markup=False, subtitle_lines=2)
+        self.folder_reset = Gtk.Button(icon_name="edit-undo-symbolic", tooltip_text="Back to the default folder",
+                                       valign=Gtk.Align.CENTER, css_classes=["flat"], visible=False)
+        self.folder_reset.connect("clicked", lambda *_: self.app.set_scripts_dir(None))
+        change = Gtk.Button(label="Change…", valign=Gtk.Align.CENTER, css_classes=["flat"])
+        change.connect("clicked", self._choose_folder)
+        show = Gtk.Button(icon_name="folder-open-symbolic", tooltip_text="Show in the file manager",
+                          action_name="app.open-folder", valign=Gtk.Align.CENTER, css_classes=["flat"])
+        for button in (self.folder_reset, change, show):
+            self.folder_row.add_suffix(button)
+        group.add(self.folder_row)
         group.add(Adw.SpinRow(title="Fixed speed", subtitle="Words per minute when voice follow is off", adjustment=self.wpm_adj))
         self.display_row = Adw.ComboRow(title="Show the script on", subtitle="Automatic finds the Elgato Prompter")
         self.display_row.connect("notify::selected", self._display_picked)
@@ -373,12 +381,19 @@ class ControlWindow(Adw.ApplicationWindow):
             row.file = name
             self.files.append(row)
 
+    def set_scripts_dir(self, folder, custom):
+        self.folder_row.set_subtitle(_tilde(folder))
+        self.folder_reset.set_visible(custom)
+
     def set_script(self, script, title):
         self.title.set_label(title)
         buf = self.text.get_buffer()
         buf.set_text("")
         self._token_chars, self._token_blocks, self._block_chars = [], [], []
-        for b, block in enumerate(script.blocks):
+        if script is None:
+            self.where.set_label("Add Markdown files to the scripts folder")
+            self.progress.set_fraction(0)
+        for b, block in enumerate(script.blocks if script else []):
             if b:
                 buf.insert(buf.get_end_iter(), "\n\n")
             start = buf.get_char_count()
@@ -394,7 +409,7 @@ class ControlWindow(Adw.ApplicationWindow):
 
         while row := self.sections.get_row_at_index(0):
             self.sections.remove(row)
-        for section in script.sections:
+        for section in script.sections if script else []:
             row = Gtk.ListBoxRow(child=Gtk.Label(label=section.title, xalign=0, margin_start=6, margin_end=12,
                                                  margin_top=4, margin_bottom=4))
             row.token = section.token
@@ -608,6 +623,19 @@ class ControlWindow(Adw.ApplicationWindow):
         if not self._updating:
             self.app.set_speech(LANGUAGES[self.language_row.get_selected()][0], self._models[self.model_row.get_selected()])
 
+    def _choose_folder(self, *_):
+        dialog = Gtk.FileDialog(title="Choose the Scripts Folder", modal=True,
+                                initial_folder=Gio.File.new_for_path(str(self.app.folder)))
+        dialog.select_folder(self, None, self._folder_chosen)
+
+    def _folder_chosen(self, dialog, result):
+        try:
+            folder = dialog.select_folder_finish(result)
+        except GLib.Error:
+            return  # cancelled
+        if folder and folder.get_path():
+            self.app.set_scripts_dir(folder.get_path())
+
     def _mic_picked(self, row, _pspec):
         if not self._updating and 0 <= row.get_selected() < len(self._mic_names):
             self.app.set_mic(self._mic_names[row.get_selected()])
@@ -667,6 +695,12 @@ def _suffix_row(title, widget, subtitle=None):
     row.add_suffix(widget)
     row.set_activatable_widget(widget)
     return row
+
+
+def _tilde(path):
+    path = str(path)
+    home = str(Path.home())
+    return "~" + path[len(home):] if path == home or path.startswith(home + "/") else path
 
 
 def _realpath(path):

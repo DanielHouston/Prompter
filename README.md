@@ -67,8 +67,10 @@ itself. The control window opens on your current screen:
 - **Setup** holds everything you set once: microphone, language, speech model, text style,
   crosshair, camera, brightness and diagnostics.
 
-Scripts live in `~/Documents/Prompter`. A welcome script is there the first time. The
-folder button in the header bar opens it in your file manager.
+Scripts live in `~/Documents/Prompter` by default (Setup → Script → Scripts folder →
+**Change…** to use another folder). A welcome script is there the first time. The folder
+button in the header bar lists your scripts, and Setup can show the folder in your file
+manager.
 
 ```markdown
 # Intro

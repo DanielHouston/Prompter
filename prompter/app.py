@@ -39,7 +39,7 @@ DEFAULTS = {
     "model": "auto",  # faster-whisper model; "auto" picks by language and GPU/CPU
     "mic": None,  # PipeWire node name; None = default source
     "display": None,  # monitor connector for the script; None = find the Elgato Prompter
-    "positions": {},  # file name -> token index, to resume where you left off
+    "positions": {},  # script path -> token index, to resume where you left off
     "record": False,  # save mic audio + every transcript/decision under ~/.cache/prompter/sessions
     "appearance": DEFAULT_APPEARANCE,
     "crosshair": DEFAULT_CROSSHAIR,
@@ -119,10 +119,8 @@ class PrompterApp(Adw.Application):
         self._show_recording()
 
         self._watch_folder()
-        self.refresh_files()
-        names = self._names()
-        if names:
-            self.open_named(self.config["file"] if self.config["file"] in names else names[0])
+        self.control.set_scripts_dir(self.folder, self.config["scripts_dir"] is not None)
+        self._open_first()
         self._sync_state()
 
     def do_activate(self):
@@ -143,8 +141,7 @@ class PrompterApp(Adw.Application):
     def folder(self):
         if self.config["scripts_dir"]:
             return Path(os.path.expanduser(self.config["scripts_dir"]))
-        documents = GLib.get_user_special_dir(GLib.UserDirectory.DIRECTORY_DOCUMENTS)
-        return Path(documents or Path.home() / "Documents") / "Prompter"
+        return default_folder()
 
     # --- devices ------------------------------------------------------------
 
@@ -197,6 +194,30 @@ class PrompterApp(Adw.Application):
                 entries.append((name, script_title(name), "can't read this file"))
         self.control.set_files(entries, self.file.name if self.file else None)
 
+    def set_scripts_dir(self, path):
+        """Read scripts from another folder; None goes back to the default."""
+        path = Path(path) if path else None
+        if (path or default_folder()) == self.folder:
+            return
+        self._remember()
+        self.config["scripts_dir"] = None if path in (None, default_folder()) else _tilde(path)
+        self._save_soon()
+        if self._monitor:
+            self._monitor.cancel()
+        self.file = None
+        self._watch_folder()
+        self.control.set_scripts_dir(self.folder, self.config["scripts_dir"] is not None)
+        self._open_first()
+
+    def _open_first(self):
+        """Open the last script if it's in the folder, else the first one there is."""
+        names = self._names()
+        self.refresh_files()
+        if names:
+            self.open_named(self.config["file"] if self.config["file"] in names else names[0])
+        else:
+            self._unload()
+
     def open_named(self, name):
         path = self.folder / name
         if self.file == path:
@@ -205,7 +226,16 @@ class PrompterApp(Adw.Application):
         self.file = path
         self.config["file"] = name
         self._rate.clear()
-        self._load(self.config["positions"].get(name, 0))
+        positions = self.config["positions"]
+        self._load(positions.get(str(path), positions.get(name, 0)))  # by name: saved before folders could change
+
+    def _unload(self):
+        """Nothing to read: an empty folder."""
+        self.script = self.aligner = self.file = None
+        self.pos = 0
+        self.view.set_script(None, 0)
+        self.control.set_script(None, "No script")
+        self.refresh_files()
 
     def _load(self, pos):
         try:
@@ -233,7 +263,8 @@ class PrompterApp(Adw.Application):
         if self.file and self.file.name in names and not self._reload_id:
             self._reload_id = GLib.timeout_add(250, self._reload)  # editors save in bursts
         if any(n.lower().endswith(SUFFIXES) for n in names):
-            GLib.idle_add(lambda: self.refresh_files() or False)
+            # an empty folder just got its first script: open it; otherwise just update the list
+            GLib.idle_add(lambda: (self._open_first() if self.script is None else self.refresh_files()) and False)
 
     def _reload(self):
         self._reload_id = 0
@@ -583,7 +614,8 @@ class PrompterApp(Adw.Application):
 
     def _remember(self):
         if self.file:
-            self.config["positions"][self.file.name] = self.pos
+            self.config["positions"][str(self.file)] = self.pos
+            self.config["positions"].pop(self.file.name, None)  # older configs keyed by name
 
     def _save_soon(self):
         if not self._save_id:
@@ -597,6 +629,20 @@ class PrompterApp(Adw.Application):
         tmp.write_text(json.dumps(self.config, indent=2))
         tmp.replace(CONFIG)
         return GLib.SOURCE_REMOVE
+
+
+def default_folder():
+    """"Prompter" in the user's Documents folder."""
+    documents = GLib.get_user_special_dir(GLib.UserDirectory.DIRECTORY_DOCUMENTS)
+    return Path(documents or Path.home() / "Documents") / "Prompter"
+
+
+def _tilde(path):
+    path = Path(path)
+    try:
+        return "~/" + str(path.relative_to(Path.home()))
+    except ValueError:
+        return str(path)
 
 
 def script_title(name):
