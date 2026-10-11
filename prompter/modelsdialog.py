@@ -4,15 +4,13 @@ Downloading is the only time Prompter goes online, so it's always a button you p
 with the size shown first.
 """
 
-from pathlib import Path
-
 import gi
 
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, GLib, Gtk  # noqa: E402
 
-from . import models  # noqa: E402
+from . import models, tilde  # noqa: E402
 
 
 class ModelsDialog(Adw.Dialog):
@@ -36,15 +34,16 @@ class ModelsDialog(Adw.Dialog):
     def refresh(self):
         for group in self.groups:
             self.page.remove(group)
-        self.groups = [self._here(), self._available()]
+        have = models.installed()
+        self.groups = [self._here(have), self._available(have)]
         for group in self.groups:
             self.page.add(group)
 
     def set_download(self, name, fraction):
-        """name None when no download is running."""
+        """name None when no download is running (it just finished, or stopped)."""
         self.fraction = fraction
-        if name != self.bar_for:
-            self.refresh()  # a download started or finished: swap its row's button
+        if name is None or name != self.bar_for:
+            self.refresh()  # a download started or finished: swap its row's button, list it
         elif self.bar:
             self.bar.set_fraction(fraction)
             self.bar.set_text(f"{fraction:.0%}")
@@ -54,20 +53,20 @@ class ModelsDialog(Adw.Dialog):
 
     # --- the two lists ----------------------------------------------------------
 
-    def _here(self):
+    def _here(self, have):
         """What's on this computer: one of these is the model in use."""
         language, choice = self.app.config["language"], self.app.config["model"]
         group = Adw.PreferencesGroup(title="On this computer")
         radios = [Gtk.CheckButton()]  # never shown: grouping even a lone choice makes it a radio button
 
-        auto_name, auto_path = models.resolve("auto", language, self.app.speech_device())
+        auto_name, auto_path = models.resolve("auto", language, self.app.speech_device(), have)
         if auto_path:
             what = f"Uses {models.title(auto_name)}, the best you have for {self.language_name}"
         else:
             what = f"Nothing for {self.language_name} yet: download one below"
         group.add(self._choice_row(radios, "Automatic", what, "auto", choice == "auto"))
 
-        for name, _path in models.installed().items():
+        for name in have:
             model = models.BY_NAME[name]
             fits = models.suits(model, language)
             about = _describe(model) if fits else f"{models.size(model.mb)} · English only: not for {self.language_name}"
@@ -79,7 +78,7 @@ class ModelsDialog(Adw.Dialog):
             group.add(row)
 
         if choice not in models.BY_NAME and choice != "auto":  # a model folder
-            row = self._choice_row(radios, models.title(choice), _tilde(choice), choice, True)
+            row = self._choice_row(radios, models.title(choice), tilde(choice), choice, True)
             change = Gtk.Button(label="Change…", valign=Gtk.Align.CENTER)
             change.connect("clicked", self._choose_folder)
             row.add_suffix(change)
@@ -90,18 +89,17 @@ class ModelsDialog(Adw.Dialog):
             group.add(folder)
         return group
 
-    def _available(self):
+    def _available(self, have):
         language, device = self.app.config["language"], self.app.speech_device()
-        have = models.installed()
         group = Adw.PreferencesGroup(title="Available to download", description=(
             "Downloaded from Hugging Face only when you click one, and kept in "
-            f"{_tilde(models.models_dir())}"))
+            f"{tilde(models.models_dir())}"))
         recommended = models.recommended(language, device)
         downloading = self.app.download.name if self.app.download else None
         self.bar = self.bar_for = None
         shown = 0
         for model in sorted(models.CATALOGUE, key=lambda m: m.name != recommended):  # the recommended one first
-            if model.name in have or not models.suits(model, language):
+            if model.name in have or not model.offered or not models.suits(model, language):
                 continue
             shown += 1
             subtitle = _subtitle(_describe(model), model)
@@ -161,7 +159,8 @@ class ModelsDialog(Adw.Dialog):
         if not path:
             return
         if not models.is_model_dir(path):
-            self.message("That folder has no faster-whisper model in it: it needs model.bin and config.json")
+            self.message("That folder has no faster-whisper model in it: it needs "
+                         + ", ".join(models.MODEL_FILES[:-1]) + " and " + models.MODEL_FILES[-1])
             return
         self.app.set_speech(model=path)
         self.refresh()
@@ -185,9 +184,3 @@ def _describe(model):
     parts = [models.size(model.mb)] + ([] if model.english_only else ["99 languages"])
     parts.append("needs a graphics card" if model.needs_gpu else "fine on a processor")
     return " · ".join(parts)
-
-
-def _tilde(path):
-    path, home = str(path), str(Path.home())
-    return "~" + path[len(home):] if path == home or path.startswith(home + "/") else path
-

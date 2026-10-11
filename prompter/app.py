@@ -15,7 +15,7 @@ gi.require_version("Gdk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, Gdk, Gio, GLib, Gtk  # noqa: E402
 
-from . import APP_ID, displays  # noqa: E402
+from . import APP_ID, displays, tilde  # noqa: E402
 from . import script as scripts  # noqa: E402
 from .actions import ACTIONS, GLOBAL_ONLY, KEYS  # noqa: E402
 from .aligner import Aligner  # noqa: E402
@@ -215,7 +215,7 @@ class PrompterApp(Adw.Application):
         if (path or default_folder()) == self.folder:
             return
         self._remember()
-        self.config["scripts_dir"] = None if path in (None, default_folder()) else _tilde(path)
+        self.config["scripts_dir"] = None if path in (None, default_folder()) else tilde(path)
         self._save_soon()
         if self._monitor:
             self._monitor.cancel()
@@ -378,7 +378,7 @@ class PrompterApp(Adw.Application):
         if kind == "ready":
             self.asr_ready = True
             self.engine = (msg.get("model"), msg.get("device"))
-            self.device = msg.get("device")
+            self._set_device(msg.get("device"))
             self.control.set_engine(self.engine)
             self._primed_at = -100
             self.set_pos(self.pos, prime=True)
@@ -395,13 +395,15 @@ class PrompterApp(Adw.Application):
         elif kind == "gate":
             self._log(**msg)
         elif kind == "missing":
-            self.missing, self.device = msg.get("model"), msg.get("device")
+            self.missing = msg.get("model")
+            self._set_device(msg.get("device"))
             self.control.set_engine(None, missing=self.missing)
             self._sync_state()
         elif kind == "status":
             self._set_status(msg["msg"])
         elif kind == "error":
-            self.asr_ready = self.asr.proc is not None
+            if self.asr.proc is None:  # it stopped; otherwise it carries on (e.g. on the processor)
+                self.asr_ready = False
             self._set_status(msg["msg"])
 
     def set_speech(self, **changes):
@@ -410,6 +412,8 @@ class PrompterApp(Adw.Application):
         if not changes:
             return
         self.config.update(changes)
+        if "device" in changes:
+            self.device = None  # where it ran before says nothing about where it will now
         self.control.set_speech(self.config["language"], self.config["model"], self.config["device"])
         self._save_soon()
         self._start_asr()
@@ -419,6 +423,12 @@ class PrompterApp(Adw.Application):
         if self.config["device"] == "cpu":
             return "cpu"
         return self.device or ("cuda" if Path("/proc/driver/nvidia/version").exists() else "cpu")
+
+    def _set_device(self, device):
+        """Where the engine says it runs, which may not be where speech_device() guessed."""
+        if device and device != self.device:
+            self.device = device
+            self.control.models_changed()  # recommends, and picks "auto", for that device
 
     # --- speech models: only ever downloaded when you ask -------------------
 
@@ -434,12 +444,21 @@ class PrompterApp(Adw.Application):
 
     def _downloaded(self, error):
         name, self.download = self.download.name, None
-        self.control.set_download(None, 0.0)
+        self.control.set_download(None, 0.0)  # which also lists it as downloaded
         if error:
             self.control.models_message(f"Couldn't download {models.BY_NAME[name].label}: {error}")
-        self.control.models_changed()
-        if error is None and (self.missing or self.config["model"] == name):
-            self._start_asr()  # now there's something to run
+        elif self._should_switch_to(name):
+            self._start_asr()
+
+    def _should_switch_to(self, name):
+        """Whether the speech engine should restart now that name has downloaded."""
+        if self.missing or self.config["model"] == name:
+            return True  # now there's something to run
+        if self.config["model"] != "auto":
+            return False
+        if self.engine is None:
+            return self.asr.proc is not None  # still loading, perhaps not the best one any more
+        return models.resolve("auto", self.config["language"], self.engine[1])[0] != self.engine[0]
 
     def delete_model(self, name):
         try:
@@ -774,14 +793,6 @@ def default_folder():
     return Path(documents or Path.home() / "Documents") / "Prompter"
 
 
-def _tilde(path):
-    path = Path(path)
-    try:
-        return "~/" + str(path.relative_to(Path.home()))
-    except ValueError:
-        return str(path)
-
-
 def script_title(name):
     """"my_first-video.md" -> "My first video"."""
     stem = Path(name).stem.replace("_", " ").replace("-", " ").strip()
@@ -799,4 +810,5 @@ def _load_config():
             config[key].update(value)  # keep defaults for settings added since this was saved
         else:
             config[key] = value
+    config["model"] = models.ALIASES.get(config["model"], config["model"])
     return config

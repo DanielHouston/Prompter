@@ -18,7 +18,7 @@ gi.require_version("Adw", "1")
 from gi.repository import Adw, Gdk, Gio, GLib, Gtk, Pango  # noqa: E402
 
 from .actions import GLOBAL_ONLY, KEYS  # noqa: E402
-from . import models  # noqa: E402
+from . import models, tilde  # noqa: E402
 from .fontpicker import FontPicker  # noqa: E402
 from .modelsdialog import ModelsDialog  # noqa: E402
 from .readouts import POSITIONS, TIMER_SHOWS  # noqa: E402
@@ -432,7 +432,7 @@ class ControlWindow(Adw.ApplicationWindow):
             self.files.append(row)
 
     def set_scripts_dir(self, folder, custom):
-        self.folder_row.set_subtitle(_tilde(folder))
+        self.folder_row.set_subtitle(tilde(folder))
         self.folder_reset.set_visible(custom)
 
     def set_script(self, script, title):
@@ -813,12 +813,6 @@ def _suffix_row(title, widget, subtitle=None):
     row.add_suffix(widget)
     row.set_activatable_widget(widget)
     return row
-
-
-def _tilde(path):
-    path = str(path)
-    home = str(Path.home())
-    return "~" + path[len(home):] if path == home or path.startswith(home + "/") else path
 
 
 def _realpath(path):

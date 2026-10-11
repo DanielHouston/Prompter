@@ -13,6 +13,7 @@ def make_model(path):
     path.mkdir(parents=True)
     (path / "model.bin").write_bytes(b"\0")
     (path / "config.json").write_text("{}")
+    (path / "tokenizer.json").write_text("{}")
     return path
 
 
@@ -51,6 +52,25 @@ class ModelsTest(unittest.TestCase):
         (models.models_dir() / "tiny").mkdir(parents=True)
         (models.models_dir() / "tiny" / "config.json").write_text("{}")  # no model.bin yet
         self.assertEqual(models.installed(), {})
+
+    def test_a_model_without_its_tokenizer_doesnt_count(self):
+        """faster-whisper would go online for the tokenizer, which the worker can't."""
+        (make_model(models.models_dir() / "tiny") / "tokenizer.json").unlink()
+        self.assertEqual(models.installed(), {})
+
+    def test_models_earlier_versions_could_be_set_to(self):
+        repo = self.hf / "models--Systran--faster-whisper-large-v2"
+        snapshot = make_model(repo / "snapshots" / "abc123")
+        self.assertEqual(models.resolve("large-v2", "en", "cuda"), ("large-v2", snapshot))
+        self.assertEqual(models.resolve("large", "en", "cuda"), ("large-v3", None))
+        self.assertEqual(models.resolve("turbo", "de", "cuda"), ("large-v3-turbo", None))
+        self.assertNotIn("large-v2", [m.name for m in models.CATALOGUE if m.offered])
+
+    def test_resolve_with_what_is_installed(self):
+        ours = make_model(models.models_dir() / "base")
+        have = models.installed()
+        self.assertEqual(models.resolve("auto", "de", "cpu", have), ("base", ours))
+        self.assertEqual(models.resolve("auto", "de", "cpu", {}), ("small", None))
 
     def test_automatic_uses_the_best_downloaded_model_for_the_language(self):
         make_model(models.models_dir() / "small.en")

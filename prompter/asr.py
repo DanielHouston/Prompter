@@ -22,6 +22,44 @@ def cuda_library_path():
     return ":".join(dirs)
 
 
+def follow(proc, on_message, on_done):
+    """Pass each JSON line proc writes to on_message(msg), then call on_done() once it has exited
+    and every line it wrote has been read: those two can arrive in either order, and its last
+    words (an error, "missing") usually come just before it exits."""
+    left = [2]
+
+    def finished():
+        left[0] -= 1
+        if left[0] == 0:
+            on_done()
+
+    def on_line(stream, result):
+        try:
+            line, _ = stream.read_line_finish_utf8(result)
+        except GLib.Error:
+            line = None
+        if line is None:
+            finished()
+            return
+        try:
+            msg = json.loads(line)
+        except ValueError:
+            msg = None
+        if isinstance(msg, dict):
+            on_message(msg)
+        stream.read_line_async(GLib.PRIORITY_DEFAULT, None, on_line)
+
+    def on_exit(proc, result):
+        try:
+            proc.wait_finish(result)
+        except GLib.Error:
+            pass
+        finished()
+
+    Gio.DataInputStream.new(proc.get_stdout_pipe()).read_line_async(GLib.PRIORITY_DEFAULT, None, on_line)
+    proc.wait_async(None, on_exit)
+
+
 class AsrWorker:
     def __init__(self, on_message, extra_args=()):
         self.on_message = on_message
@@ -54,9 +92,8 @@ class AsrWorker:
             return
 
         self.stdin = self.proc.get_stdin_pipe()
-        stdout = Gio.DataInputStream.new(self.proc.get_stdout_pipe())
-        self._read(stdout, self.proc)
-        self.proc.wait_async(None, self._exited)
+        proc = self.proc
+        follow(proc, lambda msg: self._message(proc, msg), lambda: self._exited(proc))
 
     def stop(self):
         if self.proc:
@@ -82,30 +119,12 @@ class AsrWorker:
         except GLib.Error:
             self.stdin = None
 
-    def _read(self, stream, proc):
-        def on_line(stream, result):
-            try:
-                line, _ = stream.read_line_finish_utf8(result)
-            except GLib.Error:
-                return
-            if line is None or proc is not self.proc:
-                return
-            try:
-                msg = json.loads(line)
-            except ValueError:
-                msg = None
-            if msg:
-                self.missing = self.missing or msg.get("type") == "missing"
-                self.on_message(msg)
-            self._read(stream, proc)
+    def _message(self, proc, msg):
+        if proc is self.proc:  # not one we've stopped
+            self.missing = self.missing or msg.get("type") == "missing"
+            self.on_message(msg)
 
-        stream.read_line_async(GLib.PRIORITY_DEFAULT, None, on_line)
-
-    def _exited(self, proc, result):
-        try:
-            proc.wait_finish(result)
-        except GLib.Error:
-            pass
+    def _exited(self, proc):
         if proc is self.proc:
             self.proc = self.stdin = None
             if not self.missing:  # that stop was expected
@@ -131,41 +150,24 @@ class ModelDownload:
             self.proc = launcher.spawnv([sys.executable, "-m", "prompter.models", "download", name])
         except GLib.Error as e:
             self.proc = None
-            GLib.idle_add(lambda: on_finished(e.message) and False)
+            error = e.message  # e itself is gone by the time the callback runs
+            GLib.idle_add(lambda: on_finished(error) and False)
             return
-        self._read(Gio.DataInputStream.new(self.proc.get_stdout_pipe()))
-        self.proc.wait_async(None, self._exited)
+        follow(self.proc, self._message, self._exited)
 
     def cancel(self):
         if self.proc:
             self.cancelled = True
             self.proc.force_exit()
 
-    def _read(self, stream):
-        def on_line(stream, result):
-            try:
-                line, _ = stream.read_line_finish_utf8(result)
-            except GLib.Error:
-                return
-            if line is None:
-                return
-            try:
-                msg = json.loads(line)
-            except ValueError:
-                msg = {}
-            if msg.get("type") == "progress" and msg.get("total"):
-                self.on_progress(msg["done"] / msg["total"])
-            elif msg.get("type") == "error":
-                self.error = msg.get("msg") or "The download failed"
-            self._read(stream)
+    def _message(self, msg):
+        if msg.get("type") == "progress" and msg.get("total"):
+            self.on_progress(msg["done"] / msg["total"])
+        elif msg.get("type") == "error":
+            self.error = msg.get("msg") or "The download failed"
 
-        stream.read_line_async(GLib.PRIORITY_DEFAULT, None, on_line)
-
-    def _exited(self, proc, result):
-        try:
-            proc.wait_finish(result)
-        except GLib.Error:
-            pass
+    def _exited(self):
+        proc = self.proc
         if self.cancelled:
             from .models import models_dir  # a cancelled download shouldn't keep the space
 

@@ -27,6 +27,7 @@ class Model:
     mb: int  # download size
     english_only: bool
     needs_gpu: bool  # too slow to keep up with speech on a processor
+    offered: bool = True  # False: superseded, but still used if it's on this computer
 
 
 CATALOGUE = (
@@ -44,8 +45,13 @@ CATALOGUE = (
     Model("distil-large-v3.5", "distil-whisper/distil-large-v3.5-ct2", "Distil large v3.5", 1516, True, True),
     Model("large-v3-turbo", "mobiuslabsgmbh/faster-whisper-large-v3-turbo", "Large v3 turbo", 1622, False, True),
     Model("large-v3", "Systran/faster-whisper-large-v3", "Large v3", 3091, False, True),
+    # Earlier faster-whisper models: earlier versions of Prompter could be set to them
+    Model("distil-large-v2", "Systran/faster-distil-whisper-large-v2", "Distil large v2", 1510, True, True, False),
+    Model("large-v2", "Systran/faster-whisper-large-v2", "Large v2", 3087, False, True, False),
+    Model("large-v1", "Systran/faster-whisper-large-v1", "Large v1", 3087, False, True, False),
 )
 BY_NAME = {m.name: m for m in CATALOGUE}
+ALIASES = {"large": "large-v3", "turbo": "large-v3-turbo"}  # other names faster-whisper accepts
 
 # "Automatic" uses the first of these that's downloaded, by (device, reading English). The first
 # is what Setup recommends downloading: accurate, and fast enough to keep up on that device.
@@ -73,10 +79,14 @@ def hf_cache():
     return Path(home) / "hub"
 
 
+MODEL_FILES = ("model.bin", "config.json", "tokenizer.json")
+
+
 def is_model_dir(path):
-    """A CTranslate2 Whisper model: what faster-whisper loads."""
+    """A CTranslate2 Whisper model that faster-whisper can load offline: without tokenizer.json
+    it would go online for one."""
     path = Path(path)
-    return (path / "model.bin").is_file() and (path / "config.json").is_file()
+    return all((path / f).is_file() for f in MODEL_FILES)
 
 
 def find(name):
@@ -120,16 +130,19 @@ def suits(model, language):
     return language == "en" or not model.english_only
 
 
-def resolve(choice, language, device):
+def resolve(choice, language, device, have=None):
     """(name, path) for a choice of "auto", a catalogue name or a model folder. path is None when
-    it isn't on this computer; for "auto" the name is then the one to recommend downloading."""
+    it isn't on this computer; for "auto" the name is then the one to recommend downloading.
+    have: installed(), if you already have it."""
+    choice = ALIASES.get(choice, choice)
     if choice not in BY_NAME and choice != "auto":
         return Path(choice).name, Path(choice) if is_model_dir(choice) else None
+    lookup = find if have is None else have.get
     if choice != "auto":
-        return choice, find(choice)
+        return choice, lookup(choice)
     order = AUTO[(device, language == "en")]
     for name in order:
-        if path := find(name):
+        if path := lookup(name):
             return name, path
     return order[0], None
 
@@ -186,18 +199,31 @@ def download(name):
     total = model.mb * 1_000_000
     done = threading.Event()
 
+    def on_disk():
+        size = 0
+        try:
+            for f in part.rglob("*"):
+                try:
+                    size += f.stat().st_size if f.is_file() else 0
+                except OSError:
+                    pass  # renamed or removed as it finished
+        except OSError:
+            pass
+        return size
+
     def report():
         while not done.wait(0.5):
             # Bytes written, from the library where it reports them; else what's on disk so far
             counted = max((b.n for b in bars if b.unit == "B"), default=0)
-            on_disk = sum(f.stat().st_size for f in part.rglob("*") if f.is_file())
-            emit(type="progress", done=min(max(counted, on_disk), total), total=total)
+            emit(type="progress", done=min(max(counted, on_disk()), total), total=total)
 
-    threading.Thread(target=report, daemon=True).start()
+    reporter = threading.Thread(target=report, daemon=True)
+    reporter.start()
     try:
         snapshot_download(model.repo, local_dir=part, allow_patterns=FILES, tqdm_class=Progress)
     finally:
         done.set()
+        reporter.join()  # before the folder moves, and so it never reports after "done"
     shutil.rmtree(part / ".cache", ignore_errors=True)  # the library's bookkeeping
     if not is_model_dir(part):
         raise RuntimeError(f"{model.repo} isn't a faster-whisper model")
