@@ -13,6 +13,9 @@ speech recognition, or at a steady speed if you prefer.
 - **Scripts are Markdown files.** Headings become sections you can jump between,
   `[cues]` are shown but never expected to be spoken, `<!-- comments -->` are hidden. Edits
   show up as soon as you save.
+- **Presenting from slides.** Open a PowerPoint (.pptx) or Impress (.odp) deck and its
+  speaker notes are the script, a section for each slide: voice follow reads along with
+  you, and your clicker moves the notes on with the slides.
 - **Eye-line crosshair** over the camera lens, with a "Find the lens" mode that blacks out
   the screen so you can see the lens through the glass.
 - **Camera self-view** in a corner of the Prompter.
@@ -75,12 +78,13 @@ Hugging Face cache are used where they are. Fixed speed needs no model at all.
 Start **Prompter** from your launcher. The script appears fullscreen on the Prompter by
 itself. The control window opens on your current screen:
 
-- **Prompt** is for while you read. It has start/pause, section jumps, voice follow or
-  fixed speed, how far through you are and roughly how long is left, and the script
-  itself: click anywhere to jump there. A quick bar holds text size, self-view, crosshair,
+- **Prompt** is for while you read. It has start/pause, section jumps, the mode (voice
+  follow or fixed speed), how far through you are and roughly how long is left, and
+  the script itself: click anywhere to jump there. A quick bar holds text size, self-view, crosshair,
   timer, progress and brightness.
-- **Setup** holds everything you set once: microphone, language, speech model, text style,
-  crosshair, camera, timer, progress, brightness and diagnostics.
+- **Setup** holds everything you set once: microphone, language, speech model, the
+  clicker to follow, text style, crosshair, camera, timer, progress, brightness and
+  diagnostics.
 
 Closing the control window doesn't stop Prompter: it stays in your tray (KDE Plasma, waybar
 and most other bars; GNOME needs the AppIndicator extension). Click the tray icon to bring
@@ -105,6 +109,38 @@ Each heading is a section. Text in square brackets is a cue for you, not somethi
 
 Voice follow works for languages that separate words with spaces. Pick yours under Setup →
 Voice follow → Language.
+
+### Presenting from slides
+
+Put the presentation in your scripts folder and open it: PowerPoint (.pptx) or LibreOffice
+Impress (.odp). For Google Slides, use File → Download → Microsoft PowerPoint. Its speaker
+notes are the script, each slide a section headed by its title, and everything else works
+as it does for any script: voice follow reads along as you talk, fixed speed scrolls, the
+section list jumps to a slide. Hidden slides are skipped, as in the slideshow.
+
+Present from Impress, PowerPoint, Google Slides or anything else, and press **Start** in
+Prompter as you begin. To have the notes move on with your slides, switch your clicker on
+under Setup → Slides; while you're started, Prompter follows it:
+
+- Forward (Page Down, →, ↓, Space, Enter) and back (Page Up, ←, ↑, Backspace) take the
+  notes to the slide on screen; Home and End go to the first and last slide. If voice
+  follow already has you reading that slide's notes, they stay where you are.
+- A click that plays one of the slide's animations doesn't move the notes on: Prompter
+  reads how many clicks each slide's animations take from the file, as the slideshow does.
+- If you talk on into the next slide's notes before clicking, the Prompt tab says which
+  slide is still on screen.
+- The clicks still reach your slides: Prompter only reads them, and only while you're
+  started.
+
+A clicker works with Markdown scripts too: there it moves from section to section.
+
+Wayland doesn't let one app see another's keys, so Prompter reads the clicker directly.
+That needs a one-time permission for that clicker only: **Allow…** next to it shows the
+commands to run. Prompter only ever offers clickers, never keyboards: being able to read a
+keyboard would mean being able to read everything typed on it.
+
+If the notes and the slides ever disagree (you moved the slides with the keyboard or mouse,
+say), the section buttons and list in the Prompt tab put them right.
 
 ### Shortcuts
 

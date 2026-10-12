@@ -140,6 +140,11 @@ def parse(markdown):
 
 
 def load(path):
+    """A Markdown script, or a presentation's speaker notes (see decks)."""
+    if str(path).lower().endswith((".pptx", ".odp")):
+        from . import decks
+
+        return decks.load(path)
     with open(path, encoding="utf-8") as f:
         return parse(f.read())
 

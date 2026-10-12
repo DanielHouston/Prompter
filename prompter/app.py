@@ -19,7 +19,7 @@ from . import APP_ID, displays, tilde  # noqa: E402
 from . import script as scripts  # noqa: E402
 from .actions import ACTIONS, GLOBAL_ONLY, KEYS  # noqa: E402
 from .aligner import Aligner  # noqa: E402
-from . import models  # noqa: E402
+from . import decks, models  # noqa: E402
 from .asr import AsrWorker, ModelDownload  # noqa: E402
 from .audio import microphones  # noqa: E402
 from .camera import CameraFeed, cameras  # noqa: E402
@@ -28,6 +28,8 @@ from .ddc import ScreenControl  # noqa: E402
 from .readouts import DEFAULT_READOUTS, Clock, Stopwatch, duration  # noqa: E402
 from .script import words_of  # noqa: E402
 from .shortcuts import GlobalShortcuts  # noqa: E402
+from .slidekeys import SlideKeys  # noqa: E402
+from .slidekeys import clickers  # noqa: E402
 from .tray import SEPARATOR, MenuItem, Tray  # noqa: E402
 from .view import DEFAULT_APPEARANCE, DEFAULT_CROSSHAIR, DEFAULT_PREVIEW, PrompterView  # noqa: E402
 
@@ -49,9 +51,10 @@ DEFAULTS = {
     "crosshair": DEFAULT_CROSSHAIR,
     "preview": DEFAULT_PREVIEW,
     "readouts": DEFAULT_READOUTS,
+    "slides": {"devices": []},  # clickers followed while started ("vendor:product")
 }
 SESSIONS = Path(GLib.get_user_cache_dir()) / "prompter" / "sessions"
-SUFFIXES = (".md", ".markdown", ".txt")
+SUFFIXES = (".md", ".markdown", ".txt") + decks.SUFFIXES
 ACCELS = {"reload": ["<Control>r"], "quit": ["<Control>q"]}  # single keys live in the window, not app-wide
 RATE_WINDOW = 40  # seconds of voice-follow progress used to estimate your speaking rate
 
@@ -76,6 +79,10 @@ class PrompterApp(Adw.Application):
         self.missing = None  # the model voice follow needs but isn't downloaded (for "auto", the one to get)
         self.device = None  # where the engine last ran or would run: "cuda" or "cpu"
         self.download = None  # the model download in progress, if any
+        # The slide your presentation is on, as far as the clicker says, and the animation clicks
+        # played on it. Voice follow can be in the next slide's notes before you click.
+        self.slide = self.slide_step = 0
+        self._clicker = ""  # what the status says about the followed clicker
         self._events = None
         self._rate = deque()  # (monotonic time, position) while voice-following
         self._primed_at = -100
@@ -110,6 +117,7 @@ class PrompterApp(Adw.Application):
         # Closing the control window only hides it: the tray brings it back
         self.tray = Tray(self.get_application_id(), "Prompter", resources.files("prompter") / "data" / f"{APP_ID}.svg",
                          self._tray_clicked, lambda: self.activate_action("toggle"))
+        self.slide_keys = SlideKeys(self._slide_key, self.refresh_slide_devices)
         self.refresh_devices()
         Gdk.Display.get_default().get_monitors().connect("items-changed", lambda *_: GLib.idle_add(self._place_display))
 
@@ -164,6 +172,12 @@ class PrompterApp(Adw.Application):
         self._refresh_displays()
         self.control.set_mics(microphones(), self.config["mic"])
         self.control.set_cameras(cameras(), self.config["preview"]["device"])
+        self.refresh_slide_devices()
+
+    def refresh_slide_devices(self):
+        self.control.set_slide_devices(clickers(), self.config["slides"]["devices"])
+        if self.playing:
+            self._sync_state()  # the status names what's followed
 
     def _refresh_displays(self):
         monitors = displays.monitors(Gdk.Display.get_default())
@@ -203,9 +217,13 @@ class PrompterApp(Adw.Application):
         entries = []
         for name in self._names():
             try:
-                words = sum(1 for t in scripts.load(self.folder / name).tokens if not t.optional)
-                entries.append((name, script_title(name), f"{words} words"))
-            except (OSError, UnicodeDecodeError):
+                script = scripts.load(self.folder / name)
+                if hasattr(script, "slides"):
+                    entries.append((name, script_title(name), f"{len(script.slides)} slides"))
+                else:
+                    words = sum(1 for t in script.tokens if not t.optional)
+                    entries.append((name, script_title(name), f"{words} words"))
+            except (OSError, UnicodeDecodeError, ValueError):
                 entries.append((name, script_title(name), "can't read this file"))
         self.control.set_files(entries, self.file.name if self.file else None)
 
@@ -241,6 +259,7 @@ class PrompterApp(Adw.Application):
         self.file = path
         self.config["file"] = name
         self.stopwatch.reset()
+        self.slide = self.slide_step = 0
         self._rate.clear()
         positions = self.config["positions"]
         self._load(positions.get(str(path), positions.get(name, 0)))  # by name: saved before folders could change
@@ -258,7 +277,7 @@ class PrompterApp(Adw.Application):
     def _load(self, pos):
         try:
             self.script = scripts.load(self.file)
-        except (OSError, UnicodeDecodeError) as e:
+        except (OSError, UnicodeDecodeError, ValueError) as e:
             self._set_status(f"Can't read {self.file.name}: {e}")
             return
         self._copy_script_to_session()
@@ -298,6 +317,8 @@ class PrompterApp(Adw.Application):
             return
         pos = max(0, min(pos, len(self.script)))
         moved = pos != self.pos
+        if source == "user" and self.script.section_at(pos) != self.slide:
+            self.slide, self.slide_step = self.script.section_at(pos), 0  # moving the notes yourself puts the slides there
         self.pos = pos
         if source != "voice":
             self.aligner.pos = pos
@@ -341,6 +362,12 @@ class PrompterApp(Adw.Application):
             where = "Finished"
         else:
             where = f"{self.script.sections[section].title} · {self._percent()}% · ~{duration(self._seconds_left())} left"
+        if self.slide_keys.open:  # following a clicker: the slide on screen, when your notes are elsewhere, and its animations
+            clicks = decks.clicks(self.script)[self.slide]
+            shown = [f"slide {self.slide + 1} on screen"] if self.slide != section else []
+            shown += [f"animation {self.slide_step} of {clicks}"] if clicks else []
+            if shown:
+                where += " · " + ", ".join(shown)
         self.control.set_position(self.pos, section, where, self.pos / max(n, 1))
         self._update_readouts()
 
@@ -391,7 +418,7 @@ class PrompterApp(Adw.Application):
                 self._log(type="hyp", at=msg.get("at"), text=msg["text"], ms=msg["ms"], **self.aligner.last)
                 if new is not None:
                     self.set_pos(new, source="voice")
-                self._set_status(f"Listening · {msg['ms']} ms")
+                self._set_status(f"Listening · {msg['ms']} ms{self._clicker}")
         elif kind == "gate":
             self._log(**msg)
         elif kind == "missing":
@@ -703,6 +730,35 @@ class PrompterApp(Adw.Application):
             shown.append((readouts["progress_position"], f"{self._percent()}%"))
         self.view.set_readouts(shown)
 
+    # --- following a clicker ---------------------------------------------------
+
+    def _slide_key(self, action):
+        """A slide key on a followed clicker: the presentation just moved, so the notes do too."""
+        if not (self.playing and self.script) or self.control.is_active() or self.display.is_active():
+            return  # with Prompter in front the key went to it, not the presentation (and its shortcuts act on it)
+        self.slide, self.slide_step, pos = decks.follow(self.script, self.pos, self.slide, self.slide_step, action)
+        self._log(type="slide", action=action, slide=self.slide, step=self.slide_step)
+        if pos != self.pos:
+            self.set_pos(pos, source="slides")
+        else:
+            self._publish_position()  # an animation played, or you'd already started on this slide
+
+    def _following(self):
+        """For the status: the clickers being followed, or what's stopping them (nothing if none are switched on)."""
+        wanted = self.config["slides"]["devices"]
+        present = [d for d in clickers() if d.id in wanted]
+        if readable := [d.name for d in present if d.readable]:
+            return " · following " + ", ".join(readable)
+        if present:
+            return f" · {present[0].name} needs a one-time permission: see Setup → Slides"
+        return " · your clicker isn't connected" if wanted else ""
+
+    def set_slide_device(self, device_id, follow):
+        followed = [d for d in self.config["slides"]["devices"] if d != device_id] + ([device_id] if follow else [])
+        self.config["slides"]["devices"] = followed
+        self._save_soon()
+        self._sync_state()
+
     def set_calibrating(self, on):
         """Find-the-lens mode: the Prompter goes black apart from the crosshair."""
         self.calibrating = on
@@ -731,6 +787,9 @@ class PrompterApp(Adw.Application):
             self.asr.listen()
         else:
             self.asr.pause()
+        # Clickers are only read while you're started
+        self.slide_keys.follow(self.config["slides"]["devices"] if self.playing else [])
+        self._clicker = self._following() if self.playing else ""
         self.view.set_running(self.playing and not voice)
         self.control.set_state(self.playing, voice, self.config["wpm"], self.config["font_size"])
         if voice and self.missing:
@@ -741,9 +800,9 @@ class PrompterApp(Adw.Application):
         elif not self.playing:
             self._set_status("Paused")
         elif not voice:
-            self._set_status(f"Scrolling at {self.config['wpm']} words per minute")
+            self._set_status(f"Scrolling at {self.config['wpm']} words per minute{self._clicker}")
         else:
-            self._set_status("Listening")
+            self._set_status(f"Listening{self._clicker}")
         self._update_tray()
         self._update_readouts()
 
@@ -811,4 +870,6 @@ def _load_config():
         else:
             config[key] = value
     config["model"] = models.ALIASES.get(config["model"], config["model"])
+    if config["mode"] not in ("voice", "fixed"):
+        config["mode"] = "voice"
     return config

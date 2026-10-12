@@ -1,8 +1,8 @@
 """Control window for the main monitor.
 
 Two tabs: Prompt, for while you're reading (transport, mode, where you are, the script with
-click-to-jump, quick toggles), and Setup, for what you set once (microphone, text, eye-line
-crosshair, camera self-view, timer and progress, Prompter screen, diagnostics).
+click-to-jump, quick toggles), and Setup, for what you set once (microphone, slides, text,
+eye-line crosshair, camera self-view, timer and progress, Prompter screen, diagnostics).
 """
 
 import bisect
@@ -22,6 +22,7 @@ from . import models, tilde  # noqa: E402
 from .fontpicker import FontPicker  # noqa: E402
 from .modelsdialog import ModelsDialog  # noqa: E402
 from .readouts import POSITIONS, TIMER_SHOWS  # noqa: E402
+from .slidekeys import rule as permission_rule  # noqa: E402
 from .view import rgba  # noqa: E402
 
 CORNERS = (("top-right", "Top right"), ("top-left", "Top left"), ("bottom-right", "Bottom right"), ("bottom-left", "Bottom left"))
@@ -54,6 +55,7 @@ class ControlWindow(Adw.ApplicationWindow):
         self._camera_paths = []
         self._display_connectors = [None]
         self._voice = True
+        self._slide_rows, self._slide_devices = [], None
         self._missing = False  # voice follow has no speech model to run
         self.models_dialog = None
         self._global_triggers = {}
@@ -246,6 +248,13 @@ class ControlWindow(Adw.ApplicationWindow):
         self.device_row.connect("notify::selected", self._device_picked)
         self.voice_group.add(self.device_row)
         page.add(self.voice_group)
+
+        self.slides_group = Adw.PreferencesGroup(title="Slides", description=(
+            "Open a PowerPoint (.pptx) or Impress (.odp) file from the scripts folder and its speaker notes "
+            "are the script, a section for each slide; Google Slides downloads as .pptx. While you're started, "
+            "the notes move on with your slides when you use a clicker switched on here: its clicks still "
+            "reach your slides."))
+        page.add(self.slides_group)
 
         group = Adw.PreferencesGroup(title="Text", description="How the script looks on the Prompter")
         reset = Gtk.Button(label="Reset", valign=Gtk.Align.CENTER, css_classes=["flat"])
@@ -649,6 +658,54 @@ class ControlWindow(Adw.ApplicationWindow):
 
     def _show_mode_detail(self):
         self.mode_detail.set_visible_child_name("fixed" if not self._voice else "missing" if self._missing else "voice")
+
+    def set_slide_devices(self, devices, followed):
+        """Clickers, each with a switch to follow it while you're started."""
+        state = [(d.id, d.name, d.readable, d.id in followed) for d in devices]
+        if state == self._slide_devices:
+            return  # unchanged: don't rebuild the rows under the pointer
+        self._slide_devices = state
+        for row in self._slide_rows:
+            self.slides_group.remove(row)
+        self._slide_rows = []
+        for device in devices:
+            row = Adw.SwitchRow(title=device.name, use_markup=False, active=device.id in followed,
+                                subtitle="Clicker" if device.readable else "Clicker · needs a one-time permission")
+            row.connect("notify::active", lambda r, _p, d=device: self._updating or self.app.set_slide_device(d.id, r.get_active()))
+            if not device.readable:
+                allow = Gtk.Button(label="Allow…", valign=Gtk.Align.CENTER)
+                allow.connect("clicked", lambda _b, d=device: self._show_permission(d))
+                row.add_suffix(allow)
+            self.slides_group.add(row)
+            self._slide_rows.append(row)
+        if not devices:
+            row = Adw.ActionRow(title="No clicker found", subtitle="Plug yours in and it appears here")
+            self.slides_group.add(row)
+            self._slide_rows.append(row)
+
+    def _show_permission(self, device):
+        commands = permission_rule(device)
+        body = (f"Wayland stops apps seeing each other's keys, so Prompter reads your {device.name} directly while "
+                "you're started. That needs a one-time permission for this clicker only. Run these commands in a terminal:")
+        dialog = Adw.AlertDialog(heading=f"Let Prompter Read {device.name}", body=body)
+        label = Gtk.Label(label=commands, selectable=True, wrap=True, wrap_mode=Pango.WrapMode.CHAR, xalign=0,
+                          css_classes=["monospace", "caption"], margin_top=8, margin_bottom=8, margin_start=10, margin_end=10)
+        attrs = Pango.AttrList()
+        attrs.insert(Pango.attr_insert_hyphens_new(False))  # a hyphen where it wraps would look like part of the command
+        label.set_attributes(attrs)
+        dialog.set_extra_child(Gtk.Frame(child=label, css_classes=["view"]))
+        dialog.add_response("close", "Close")
+        dialog.add_response("copy", "Copy Commands")
+        dialog.set_response_appearance("copy", Adw.ResponseAppearance.SUGGESTED)
+        dialog.set_default_response("copy")
+
+        def response(_dialog, answer):
+            if answer == "copy":
+                provider = Gdk.ContentProvider.new_for_bytes("text/plain;charset=utf-8", GLib.Bytes.new(commands.encode()))
+                self.get_clipboard().set_content(provider)
+
+        dialog.connect("response", response)
+        dialog.present(self)
 
     def _language_name(self):
         selected = self.language_row.get_selected()
