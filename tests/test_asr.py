@@ -57,6 +57,25 @@ class AsrTest(unittest.TestCase):
         self.run_loop(lambda: worker.proc is None)
         self.assertEqual([m["type"] for m in messages], ["error"])
 
+    def test_a_failing_handler_doesnt_stop_the_reading(self):
+        """A message handler that raises is a bug, but the lines after it and the exit still get through."""
+        self.python("""echo '{"type": "status", "msg": "one"}'
+echo '{"type": "status", "msg": "two"}'
+exit 1""")
+        messages, errors = [], []
+
+        def handle(msg):
+            messages.append(msg)
+            if len(messages) == 1:
+                raise KeyError("ms")
+
+        with mock.patch.object(sys, "excepthook", lambda kind, *_: errors.append(kind)):
+            worker = asr.AsrWorker(handle)
+            worker.start("auto")
+            self.run_loop(lambda: worker.proc is None)
+        self.assertEqual([m["type"] for m in messages], ["status", "status", "error"])  # the error: it stopped
+        self.assertEqual(errors, [KeyError])  # still reported, as an unhandled error
+
     def test_download_error_after_it_exits(self):
         self.python("""( sleep 0.3; echo '{"type": "progress", "done": 1, "total": 2}'
   echo '{"type": "error", "msg": "No space left"}' ) &

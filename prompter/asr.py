@@ -45,9 +45,11 @@ def follow(proc, on_message, on_done):
             msg = json.loads(line)
         except ValueError:
             msg = None
-        if isinstance(msg, dict):
-            on_message(msg)
-        stream.read_line_async(GLib.PRIORITY_DEFAULT, None, on_line)
+        try:
+            if isinstance(msg, dict):
+                on_message(msg)
+        finally:  # a handler that fails is a bug, but mustn't stop the reading: the exit is only reported after it
+            stream.read_line_async(GLib.PRIORITY_DEFAULT, None, on_line)
 
     def on_exit(proc, result):
         try:
