@@ -268,6 +268,11 @@ class ControlWindow(Adw.ApplicationWindow):
         group.add(self._spin_row("appearance", "line_spacing", "Line spacing", None, 0.9, 2.0, 0.05, 2))
         group.add(self._spin_row("appearance", "margin", "Side margins", "% of the width", 0, 25, 0.5, 1))
         group.add(self._spin_row("appearance", "reading_line", "Reading line", "% down from the top", 10, 90, 1, 0))
+        self.center_row = Adw.ExpanderRow(title="Centre on the lens", show_enable_switch=True,
+                                          subtitle="Short lines centred on the lens, so your eyes barely move as you read")
+        self.center_row.connect("notify::enable-expansion", lambda r, _p: self._updating or self.app.set_style("appearance", "center_word", r.get_enable_expansion()))
+        self.center_row.add_row(self._spin_row("appearance", "line_width", "Line width", "% of the width: narrower moves your eyes less", 20, 90, 5, 0))
+        group.add(self.center_row)
         group.add(_suffix_row("Text colour", self._color_button("appearance", "text_color")))
         group.add(_suffix_row("Background", self._color_button("appearance", "background")))
         group.add(_suffix_row("Accent", self._color_button("appearance", "accent"), "Headings and the reading marker"))
@@ -525,6 +530,7 @@ class ControlWindow(Adw.ApplicationWindow):
             button.set_rgba(rgba(values[group][key]))
         for (group, key), adj in self.numbers.items():
             adj.set_value(values[group][key])
+        self.center_row.set_enable_expansion(appearance["center_word"])
         self.cross_row.set_active(crosshair["enabled"])
         self.quick_crosshair.set_active(crosshair["enabled"])
         self._updating = False

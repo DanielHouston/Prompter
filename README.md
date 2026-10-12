@@ -17,7 +17,8 @@ speech recognition, or at a steady speed if you prefer.
   speaker notes are the script, a section for each slide: voice follow reads along with
   you, and your clicker moves the notes on with the slides.
 - **Eye-line crosshair** over the camera lens, with a "Find the lens" mode that blacks out
-  the screen so you can see the lens through the glass.
+  the screen so you can see the lens through the glass. To keep your eyes close to the lens as
+  you read, the script can run in short lines centred on it.
 - **Camera self-view** in a corner of the Prompter.
 - **A timer and progress** on the Prompter: reading time, time left or the time of day, and
   how far through the script you are, in whichever corner or edge suits you.
@@ -109,6 +110,16 @@ Each heading is a section. Text in square brackets is a cue for you, not somethi
 
 Voice follow works for languages that separate words with spaces. Pick yours under Setup →
 Voice follow → Language.
+
+### Keeping your eyes on the lens
+
+Even with the line you're on held at the reading line, your eyes move along it, and the
+camera sees them move. Setup → Text → **Centre on the lens** sets the script in short lines
+centred on the lens instead, so your eyes stay close to it, and breaks them where you'd pause
+anyway: at the end of a sentence or a clause, and never just after a little word like "a" or
+"the". It scrolls as usual. The lines are centred in line with the crosshair, so use **Find
+the lens** and **Put the Reading Line at the Crosshair** first. **Line width** sets how short
+they are: narrower moves your eyes less, wider fits more on each line.
 
 ### Presenting from slides
 

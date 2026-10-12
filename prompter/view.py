@@ -1,6 +1,7 @@
 """The prompter display: large text that scrolls so the current line sits on the reading line."""
 
 import math
+import re
 
 import gi
 
@@ -26,6 +27,8 @@ DEFAULT_APPEARANCE = {
     "margin": 5.5,  # % of the width, each side
     "line_spacing": 1.12,
     "reading_line": 36,  # % of the height where the current line sits
+    "center_word": False,  # short lines centred on the lens (the crosshair's x), so your eyes barely move
+    "line_width": 50,  # % of the width, when centred on the lens
 }
 DEFAULT_CROSSHAIR = {
     "enabled": False,
@@ -42,7 +45,7 @@ DEFAULT_PREVIEW = {
     "size": 30,  # % of the screen width
     "mirror": True,
 }
-_LAYOUT_KEYS = ("font", "margin", "line_spacing")
+_LAYOUT_KEYS = ("font", "margin", "line_spacing", "center_word", "line_width")
 
 
 def rgba(hex_color):
@@ -65,7 +68,7 @@ class _Block:
     def __init__(self, layout, y):
         self.layout = layout
         self.y = y
-        self.height = layout.get_pixel_size()[1]
+        self.height = 0
 
 
 class PrompterView(Gtk.Widget):
@@ -77,6 +80,7 @@ class PrompterView(Gtk.Widget):
         self.crosshair = dict(DEFAULT_CROSSHAIR)
         self._colors()
         self.blocks = []
+        self._left = 0.0  # where the lines start, when centred on the lens
         self.laid_out_width = 0
         self.pos = 0.0  # fractional token index on the reading line
         self.spoken = 0  # tokens before this are dimmed
@@ -106,7 +110,8 @@ class PrompterView(Gtk.Widget):
         self._relayout(jump=True)
 
     def set_style(self, appearance, crosshair):
-        relayout = any(appearance.get(k) != self.appearance.get(k) for k in _LAYOUT_KEYS)
+        relayout = any(appearance.get(k) != self.appearance.get(k) for k in _LAYOUT_KEYS) or (
+            appearance.get("center_word") and crosshair.get("x") != self.crosshair["x"])  # lines fit either side of the lens
         self.appearance = {**DEFAULT_APPEARANCE, **appearance}
         self.crosshair = {**DEFAULT_CROSSHAIR, **crosshair}
         self._colors()
@@ -184,6 +189,12 @@ class PrompterView(Gtk.Widget):
             return
 
         margin = self._margin()
+        column = width - 2 * margin
+        if self.centered:  # a short column centred on the lens, so your eyes barely move
+            lens_x = width * self.crosshair["x"] / 100
+            column = min(width * float(self.appearance["line_width"]) / 100, 2 * (min(lens_x, width - lens_x) - margin))
+            column = max(column, self.font_size * 4)
+            self._left = round(max(margin, min(lens_x - column / 2, width - margin - column)))  # on screen, near an edge too
         y = 0.0
         for b, block in enumerate(self.script.blocks):
             heading = block.kind == "heading"
@@ -195,14 +206,24 @@ class PrompterView(Gtk.Widget):
             if heading:
                 desc.set_weight(Pango.Weight.BOLD)
             layout.set_font_description(desc)
-            layout.set_width(int((width - 2 * margin) * Pango.SCALE))
-            layout.set_wrap(Pango.WrapMode.WORD_CHAR)
-            layout.set_line_spacing(float(self.appearance["line_spacing"]))
             self.blocks.append(_Block(layout, y))
             self._style(b)
+            if self.centered:  # measured on one line as styled: headings are spaced-out capitals
+                layout.set_text(phrase_lines(block.text, _x_at(layout), column - 1), -1)
+                layout.set_alignment(Pango.Alignment.CENTER)
+            layout.set_width(int(column * Pango.SCALE))
+            layout.set_wrap(Pango.WrapMode.WORD_CHAR)
+            layout.set_line_spacing(float(self.appearance["line_spacing"]))
+            self.blocks[-1].height = layout.get_pixel_size()[1]
             y += self.blocks[-1].height + self.font_size * (0.25 if heading else 0.55)
 
         self.set_position(self.pos, jump=jump)
+
+    @property
+    def centered(self):
+        """Short lines centred on the lens, ending where you'd pause, instead of lines across the
+        whole width: your eyes stay close to the camera."""
+        return bool(self.appearance["center_word"])
 
     def _style(self, b):
         """Colour a block: already-read text dim, cues muted and italic, headings accented."""
@@ -271,17 +292,18 @@ class PrompterView(Gtk.Widget):
         if self.blocks:
             top = reading_y - self.scroll
             margin = self._margin()
+            left = self._left if self.centered else margin
             for blk in self.blocks:
                 y = round(top + blk.y)  # whole pixels: crisp glyphs, and plain shifts compress well
                 if y > height or y + blk.height < 0:
                     continue
                 snapshot.save()
-                snapshot.translate(Graphene.Point().init(margin, y))
+                snapshot.translate(Graphene.Point().init(left, y))
                 snapshot.append_layout(blk.layout, self.c_text)
                 snapshot.restore()
 
             marker = self.font_size * 0.9
-            snapshot.append_color(self.c_accent, Graphene.Rect().init(margin * 0.35, reading_y - marker / 2, 5, marker))
+            snapshot.append_color(self.c_accent, Graphene.Rect().init(left - margin * 0.65, reading_y - marker / 2, 5, marker))
 
         if self.preview["enabled"]:
             self._draw_preview(snapshot, width, height)
@@ -461,6 +483,63 @@ def place_readouts(width, height, pills, avoid=None):
             spots[i] = (round(x), round(y + (tallest - pills[i][2]) / 2))
             x += pills[i][1] + GAP
     return spots
+
+
+def phrase_lines(text, x_at, width):
+    """text with a newline in place of each space where a line should break (the same length,
+    so every byte offset into it still holds): lines no wider than width that end, where they
+    can, where you'd pause anyway. Chosen for the whole paragraph at once, as typesetters do.
+    x_at(byte offset) is how far along the text set on one line."""
+    data = bytearray(text.encode())
+    words = [m.span() for m in re.finditer(rb"\S+", data)]
+    n = len(words)
+    reach = [(x_at(start), x_at(end)) for start, end in words]
+    endings = [_ending(bytes(data[start:end])) for start, end in words]
+    cost, back = [0.0] + [math.inf] * n, [0] * (n + 1)  # the best lines for the first k words, and where the last starts
+    for k in range(1, n + 1):
+        for i in range(k - 1, -1, -1):
+            fill = (reach[k - 1][1] - reach[i][0]) / width
+            if fill > 1 and i < k - 1:
+                break
+            if k == n:  # the last line can be short, but not a lone little word
+                line = 0.3 if fill < 0.25 else 0.0
+            else:  # empty space costs more the more there is; a good ending earns some back
+                line = (1 - fill) ** 2 - endings[k - 1]
+            if cost[i] + line + 0.1 < cost[k]:
+                cost[k], back[k] = cost[i] + line + 0.1, i
+    k = n
+    while back[k]:
+        k = back[k]
+        data[words[k - 1][1]] = ord("\n")
+    return data.decode()
+
+
+def _ending(word):
+    """How good a place the end of this word is to end a line: the end of a sentence, of a
+    clause or a [cue] are good; after a little word like "a", "the", "to" or "der", which belongs
+    with the words after it, is poor."""
+    word = word.decode()
+    if word.endswith("]"):
+        return 0.4
+    word = word.rstrip("\"'”’»)")
+    if word.endswith((".", "!", "?", "…")):
+        return 0.8
+    if word.endswith((",", ";", ":", "–", "—")):
+        return 0.4
+    return -0.4 if len(word) <= 3 else 0.0
+
+
+def _x_at(layout):
+    """Byte index -> x (px) on a one-line layout, measured in one pass along it: index_to_pos
+    goes back along the line every time, which on a long paragraph adds up to seconds."""
+    xs, it = {}, layout.get_iter()
+    while True:
+        rect = it.get_cluster_extents()[1]
+        xs[it.get_index()] = rect.x / Pango.SCALE
+        if not it.next_cluster():
+            break
+    xs.setdefault(len(layout.get_text().encode()), (rect.x + rect.width) / Pango.SCALE)
+    return lambda i: xs[i] if i in xs else layout.index_to_pos(i).x / Pango.SCALE
 
 
 def _insert(attrs, attr, start, end):

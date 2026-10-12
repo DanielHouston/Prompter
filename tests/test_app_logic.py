@@ -10,7 +10,7 @@ from prompter.actions import ACTIONS, GLOBAL_ONLY, KEYS  # noqa: E402
 from prompter.fontpicker import closest, for_language  # noqa: E402
 from prompter.readouts import Clock, Stopwatch, duration  # noqa: E402
 from prompter.tray import SEPARATOR, MenuItem, _pixmap_variant, _pixmaps  # noqa: E402
-from prompter.view import GAP, PAD, place_readouts  # noqa: E402
+from prompter.view import GAP, PAD, phrase_lines, place_readouts  # noqa: E402
 
 
 class FakeMonitor:
@@ -189,6 +189,36 @@ class PlaceReadoutsTest(unittest.TestCase):
         self.assertEqual(spots[1], (self.W - PAD - 60, self.H - PAD - 40))  # not in the way: stays
         view_left = (PAD, PAD, 300, 170)
         self.assertEqual(place_readouts(self.W, self.H, [("top-left", 60, 40)], avoid=view_left), [(PAD + 300 + PAD, PAD)])
+
+
+class PhraseLinesTest(unittest.TestCase):
+    """Centred on the lens: short lines that end where you'd pause. Monospace here, 10 px a byte."""
+
+    def lines(self, text, chars):
+        out = phrase_lines(text, lambda i: i * 10, chars * 10)
+        self.assertEqual(len(out.encode()), len(text.encode()))  # every word's byte offset still holds
+        self.assertEqual(out.replace("\n", " "), text)
+        return out.split("\n")
+
+    def test_lines_fit(self):
+        text = "Camera Hub only runs on Windows and macOS, so on Linux the prompter is just a second screen."
+        for line in self.lines(text, 20):
+            self.assertLessEqual(len(line), 20)
+
+    def test_ends_sentences_and_clauses(self):
+        self.assertEqual(self.lines("That's the whole idea. Write your script in Markdown, and start talking.", 24),
+                         ["That's the whole idea.", "Write your script", "in Markdown,", "and start talking."])
+
+    def test_little_words_go_with_what_follows(self):
+        for line in self.lines("We look at how to turn an Elgato Prompter into a proper voice-following teleprompter", 22)[:-1]:
+            self.assertNotIn(line.split()[-1], {"at", "to", "an", "a", "the"})
+
+    def test_a_word_too_long_for_a_line_keeps_its_own(self):
+        self.assertEqual(self.lines("a voice-following teleprompter", 10), ["a", "voice-following", "teleprompter"])
+
+    def test_short_text_is_left_alone(self):
+        self.assertEqual(self.lines("Wrapping up", 20), ["Wrapping up"])
+        self.assertEqual(self.lines("", 20), [""])
 
 
 class FakeSettings:

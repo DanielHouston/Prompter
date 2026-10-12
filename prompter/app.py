@@ -678,7 +678,7 @@ class PrompterApp(Adw.Application):
         self._save_soon()
 
     def reset_style(self):
-        self.config["appearance"] = dict(DEFAULT_APPEARANCE)
+        self.config["appearance"] = {**DEFAULT_APPEARANCE, "center_word": self.config["appearance"]["center_word"]}
         self.config["crosshair"] = {**DEFAULT_CROSSHAIR, "enabled": self.config["crosshair"]["enabled"]}
         self.view.set_style(self.config["appearance"], self.config["crosshair"])
         self.control.set_style(self.config["appearance"], self.config["crosshair"])
